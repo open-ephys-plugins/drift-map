@@ -33,37 +33,34 @@
 	Includes buttons for opening the canvas in a tab or window
 */
 
-class DataSnapshotEditor : public VisualizerEditor, 
-	public Button::Listener,
-	public ChangeListener
+class DataSnapshotEditor : public VisualizerEditor,
+                           public Button::Listener,
+                           public ChangeListener
 {
 public:
+    /** Constructor */
+    DataSnapshotEditor (GenericProcessor* parentNode);
 
-	/** Constructor */
-	DataSnapshotEditor(GenericProcessor* parentNode);
+    /** Destructor */
+    ~DataSnapshotEditor() {}
 
-	/** Destructor */
-	~DataSnapshotEditor() { }
+    /** Creates the canvas */
+    Visualizer* createNewCanvas();
 
-	/** Creates the canvas */
-	Visualizer* createNewCanvas();
+    /** Called when button is pressed*/
+    void buttonClicked (Button* button);
 
-	/** Called when button is pressed*/
-	void buttonClicked(Button* button);
-
-	/** Called when snapshot is ready */
-	void changeListenerCallback(ChangeBroadcaster* source);
+    /** Called when snapshot is ready */
+    void changeListenerCallback (ChangeBroadcaster* source);
 
 private:
+    std::unique_ptr<UtilityButton> takeSnapshotButton;
+    std::unique_ptr<ComboBox> streamSelection;
 
-	std::unique_ptr<UtilityButton> takeSnapshotButton;
-	std::unique_ptr<ComboBox> streamSelection;
+    uint16 currentStream = 0;
 
-	uint16 currentStream = 0;
-
-	/** Generates an assertion if this class leaks */
-	JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(DataSnapshotEditor);
+    /** Generates an assertion if this class leaks */
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DataSnapshotEditor);
 };
-
 
 #endif // DataSnapshotEDITOR_H_DEFINED

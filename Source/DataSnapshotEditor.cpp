@@ -21,57 +21,53 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 */
 
-
 #include "DataSnapshotEditor.h"
 
-#include "DataSnapshotCanvas.h"
 #include "DataSnapshot.h"
+#include "DataSnapshotCanvas.h"
 
-
-DataSnapshotEditor::DataSnapshotEditor(GenericProcessor* p)
-    : VisualizerEditor(p, "Snapshot", 200)
+DataSnapshotEditor::DataSnapshotEditor (GenericProcessor* p)
+    : VisualizerEditor (p, "Snapshot", 200)
 {
     // Stream selector editor
-    addSelectedStreamParameterEditor(Parameter::PROCESSOR_SCOPE, "current_stream", 15, 35);
-    auto currStreamEditor = getParameterEditor("current_stream");
-    currStreamEditor->setLayout(ParameterEditor::Layout::nameHidden);
-    currStreamEditor->setSize(170, 20);
-    
+    addSelectedStreamParameterEditor (Parameter::PROCESSOR_SCOPE, "current_stream", 15, 35);
+    auto currStreamEditor = getParameterEditor ("current_stream");
+    currStreamEditor->setLayout (ParameterEditor::Layout::nameHidden);
+    currStreamEditor->setSize (170, 20);
+
     // Channel selector editor
-    addMaskChannelsParameterEditor(Parameter::PROCESSOR_SCOPE, "channels", 15, 75);
-    getParameterEditor("channels")->setLayout(ParameterEditor::Layout::nameOnTop);
-    getParameterEditor("channels")->setSize(80, 36);
+    addMaskChannelsParameterEditor (Parameter::PROCESSOR_SCOPE, "channels", 15, 75);
+    getParameterEditor ("channels")->setLayout (ParameterEditor::Layout::nameOnTop);
+    getParameterEditor ("channels")->setSize (80, 36);
 
     // Snapshot button
-    takeSnapshotButton = std::make_unique<UtilityButton>("SNAP");
-    takeSnapshotButton->addListener(this);
-    takeSnapshotButton->setRadius(3.0f);
-    takeSnapshotButton->setBounds(110, 80, 75, 30);
-    addAndMakeVisible(takeSnapshotButton.get());
+    takeSnapshotButton = std::make_unique<UtilityButton> ("SNAP");
+    takeSnapshotButton->addListener (this);
+    takeSnapshotButton->setRadius (3.0f);
+    takeSnapshotButton->setBounds (110, 80, 75, 30);
+    addAndMakeVisible (takeSnapshotButton.get());
 
-    ChangeBroadcaster* snap = dynamic_cast<ChangeBroadcaster*>(p);
-    snap->addChangeListener(this);
-
+    ChangeBroadcaster* snap = dynamic_cast<ChangeBroadcaster*> (p);
+    snap->addChangeListener (this);
 }
 
 Visualizer* DataSnapshotEditor::createNewCanvas()
 {
-    return new DataSnapshotCanvas((DataSnapshot*) getProcessor());;
+    return new DataSnapshotCanvas ((DataSnapshot*) getProcessor());
+    ;
 }
 
-
-void DataSnapshotEditor::buttonClicked(Button* button)
+void DataSnapshotEditor::buttonClicked (Button* button)
 {
     if (button == takeSnapshotButton.get() && CoreServices::getAcquisitionStatus())
     {
-        NotificationParameter* snapParam = (NotificationParameter*) getProcessor()->getParameter("snap");
+        NotificationParameter* snapParam = (NotificationParameter*) getProcessor()->getParameter ("snap");
         snapParam->triggerNotification();
-        takeSnapshotButton->setEnabledState(false);
+        takeSnapshotButton->setEnabledState (false);
     }
 }
 
-void DataSnapshotEditor::changeListenerCallback(ChangeBroadcaster* source)
+void DataSnapshotEditor::changeListenerCallback (ChangeBroadcaster* source)
 {
-	takeSnapshotButton->setEnabledState(true);
-
+    takeSnapshotButton->setEnabledState (true);
 }

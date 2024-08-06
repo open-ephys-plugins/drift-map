@@ -27,70 +27,67 @@
 
 #include <ProcessorHeaders.h>
 
-
 /** 
 	A plugin that includes a canvas for displaying incoming data
 */
 
 class DataSnapshot : public GenericProcessor,
-				     public ChangeBroadcaster
+                     public ChangeBroadcaster
 {
 public:
-	/** The class constructor, used to initialize any members.*/
-	DataSnapshot();
+    /** The class constructor, used to initialize any members.*/
+    DataSnapshot();
 
-	/** The class destructor, used to deallocate memory*/
-	~DataSnapshot();
+    /** The class destructor, used to deallocate memory*/
+    ~DataSnapshot();
 
-	/** If the processor has a custom editor, this method must be defined to instantiate it. */
-	AudioProcessorEditor* createEditor() override;
+    /** If the processor has a custom editor, this method must be defined to instantiate it. */
+    AudioProcessorEditor* createEditor() override;
 
-	/** Called every time the settings of an upstream plugin are changed.
+    /** Called every time the settings of an upstream plugin are changed.
 		Allows the processor to handle variations in the channel configuration or any other parameter
 		passed through signal chain. The processor can use this function to modify channel objects that
 		will be passed to downstream plugins. */
-	void updateSettings() override;
+    void updateSettings() override;
 
-	void registerParameters() override;
+    void registerParameters() override;
 
-	/** Called when a parameter value is changed*/
-	void parameterValueChanged(Parameter* param);
+    /** Called when a parameter value is changed*/
+    void parameterValueChanged (Parameter* param);
 
-	/** Defines the functionality of the processor.
+    /** Defines the functionality of the processor.
 		The process method is called every time a new data buffer is available.
 		Visualizer plugins typically use this method to send data to the canvas for display purposes */
-	void process(AudioBuffer<float>& buffer) override;
+    void process (AudioBuffer<float>& buffer) override;
 
-	/** Handles broadcast messages sent during acquisition
+    /** Handles broadcast messages sent during acquisition
 		Called automatically whenever a broadcast message is sent through the signal chain */
-	void handleBroadcastMessage(const String& message, const int64 systemTimeMillis) override;
+    void handleBroadcastMessage (const String& message, const int64 systemTimeMillis) override;
 
-	/** Saving custom settings to XML. This method is not needed to save the state of
+    /** Saving custom settings to XML. This method is not needed to save the state of
 		Parameter objects */
-	void saveCustomParametersToXml(XmlElement* parentElement) override;
+    void saveCustomParametersToXml (XmlElement* parentElement) override;
 
-	/** Load custom settings from XML. This method is not needed to load the state of
+    /** Load custom settings from XML. This method is not needed to load the state of
 		Parameter objects*/
-	void loadCustomParametersFromXml(XmlElement* parentElement) override;
+    void loadCustomParametersFromXml (XmlElement* parentElement) override;
 
-	/** Returns a pointer to the snapshot buffer */
-	AudioBuffer<float>* getSnapshot();
+    /** Returns a pointer to the snapshot buffer */
+    AudioBuffer<float>* getSnapshot();
 
 private:
+    /**Check whether data stream exists */
+    bool streamExists (uint16 streamId);
 
-	/**Check whether data stream exists */
-	bool streamExists(uint16 streamId);
+    AudioBuffer<float> snapshotBuffer;
 
-	AudioBuffer<float> snapshotBuffer;
+    int numSamples;
+    int numChannels;
+    uint16 currentStream;
+    int snapSampleIndex;
 
-	int numSamples;
-	int numChannels;
-	uint16 currentStream;
-	int snapSampleIndex;
-
-	/** Generates an assertion if this class leaks */
-	JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(DataSnapshot);
-
+    /** Generates an assertion if this class leaks */
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DataSnapshot);
 };
 
 #endif // DataSnapshot_H_DEFINED

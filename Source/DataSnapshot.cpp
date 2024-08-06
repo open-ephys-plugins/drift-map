@@ -25,81 +25,80 @@
 
 #include "DataSnapshotEditor.h"
 
-
-DataSnapshot::DataSnapshot() 
-    : GenericProcessor("Data Snapshot")
-    , currentStream(0)
-    , numChannels(0)
-    , numSamples(0)
-    , snapSampleIndex(0)
+DataSnapshot::DataSnapshot()
+    : GenericProcessor ("Data Snapshot"), currentStream (0), numChannels (0), numSamples (0), snapSampleIndex (0)
 {
 }
 
-
 DataSnapshot::~DataSnapshot()
 {
-
 }
 
 void DataSnapshot::registerParameters()
 {
-    addIntParameter(Parameter::PROCESSOR_SCOPE,
-        "window", "Window", "Snapshot size in ms",
-        100, 20, 200);
-    
-    addSelectedStreamParameter(Parameter::PROCESSOR_SCOPE,
-        "current_stream", "Current Stream", "Currently selected stream",
-        {}, 0, true, false);
+    addIntParameter (Parameter::PROCESSOR_SCOPE,
+                     "window",
+                     "Window",
+                     "Snapshot size in ms",
+                     100,
+                     20,
+                     200);
 
-    addMaskChannelsParameter(Parameter::PROCESSOR_SCOPE,
-        "channels", "Channels", "Snapshot channels");
+    addSelectedStreamParameter (Parameter::PROCESSOR_SCOPE,
+                                "current_stream",
+                                "Current Stream",
+                                "Currently selected stream",
+                                {},
+                                0,
+                                true,
+                                false);
 
-    addNotificationParameter(Parameter::PROCESSOR_SCOPE,
-        "snap", "Snap",  "Used to trigger snapshots", false);
+    addMaskChannelsParameter (Parameter::PROCESSOR_SCOPE,
+                              "channels",
+                              "Channels",
+                              "Snapshot channels");
+
+    addNotificationParameter (Parameter::PROCESSOR_SCOPE,
+                              "snap",
+                              "Snap",
+                              "Used to trigger snapshots",
+                              false);
 }
-
 
 AudioProcessorEditor* DataSnapshot::createEditor()
 {
-    editor = std::make_unique<DataSnapshotEditor>(this);
+    editor = std::make_unique<DataSnapshotEditor> (this);
     return editor.get();
 }
 
-
 void DataSnapshot::updateSettings()
 {
-
 }
 
-
-bool DataSnapshot::streamExists(uint16 streamId)
+bool DataSnapshot::streamExists (uint16 streamId)
 {
     for (auto stream : getDataStreams())
     {
         if (stream->getStreamId() == streamId)
             return true;
     }
-    
+
     return false;
-    
 }
 
-
-void DataSnapshot::parameterValueChanged(Parameter* parameter)
+void DataSnapshot::parameterValueChanged (Parameter* parameter)
 {
-
-    if (parameter->getName().equalsIgnoreCase("snap") && CoreServices::getAcquisitionStatus())
+    if (parameter->getName().equalsIgnoreCase ("snap") && CoreServices::getAcquisitionStatus())
     {
         snapSampleIndex = 0;
         return;
     }
 
-    if (parameter->getName().equalsIgnoreCase("current_stream"))
+    if (parameter->getName().equalsIgnoreCase ("current_stream"))
     {
-
         int streamIndex = (int) parameter->getValue();
-        
-        if(streamIndex < 0 || streamIndex >= getDataStreams().size())
+
+        if (streamIndex < 0 || streamIndex >= getDataStreams().size())
         {
             currentStream = 0;
             numChannels = 0;
@@ -108,71 +107,65 @@ void DataSnapshot::parameterValueChanged(Parameter* parameter)
         else
         {
             currentStream = getDataStreams()[streamIndex]->getStreamId();
-            numChannels = getDataStream(currentStream)->getChannelCount();
-            numSamples = int(getDataStream(currentStream)->getSampleRate() * ((float)getParameter("window")->getValue() / 1000));
+            numChannels = getDataStream (currentStream)->getChannelCount();
+            numSamples = int (getDataStream (currentStream)->getSampleRate() * ((float) getParameter ("window")->getValue() / 1000));
         }
 
-        MaskChannelsParameter* chansParam = (MaskChannelsParameter*)getParameter("channels");
-        chansParam->setChannelCount(numChannels);
+        MaskChannelsParameter* chansParam = (MaskChannelsParameter*) getParameter ("channels");
+        chansParam->setChannelCount (numChannels);
         chansParam->valueChanged();
-
     }
-    else if (parameter->getName().equalsIgnoreCase("window"))
+    else if (parameter->getName().equalsIgnoreCase ("window"))
     {
-
-        if (streamExists(currentStream))
+        if (streamExists (currentStream))
         {
-            numSamples = int(getDataStream(currentStream)->getSampleRate() * ((float)parameter->getValue() / 1000));
+            numSamples = int (getDataStream (currentStream)->getSampleRate() * ((float) parameter->getValue() / 1000));
         }
-      
     }
-    else if (parameter->getName().equalsIgnoreCase("channels"))
+    else if (parameter->getName().equalsIgnoreCase ("channels"))
     {
-        MaskChannelsParameter* param = (MaskChannelsParameter*)parameter;
+        MaskChannelsParameter* param = (MaskChannelsParameter*) parameter;
         numChannels = param->getArrayValue().size();
 
-       // std::cout << "Num channels: " << numChannels << std::endl;
+        // std::cout << "Num channels: " << numChannels << std::endl;
     }
 
-    if(numChannels > 0  && numSamples > 0)
+    if (numChannels > 0 && numSamples > 0)
     {
-        LOGDD(" Snapshot buffer resized: ", numChannels, "x", numSamples);
-        snapshotBuffer.setSize(numChannels, numSamples);
+        LOGDD (" Snapshot buffer resized: ", numChannels, "x", numSamples);
+        snapshotBuffer.setSize (numChannels, numSamples);
         snapshotBuffer.clear();
     }
 }
 
-
-void DataSnapshot::process(AudioBuffer<float>& buffer)
+void DataSnapshot::process (AudioBuffer<float>& buffer)
 {
-
     if (snapSampleIndex > -1)
     {
-        int samplesPerBlock = getNumSamplesInBlock(currentStream);
+        int samplesPerBlock = getNumSamplesInBlock (currentStream);
         //std::cout << "Samples per block: " << samplesPerBlock << std::endl;
 
-        DataStream* stream = getDataStream(currentStream);
+        DataStream* stream = getDataStream (currentStream);
 
-        int samplesToCopy = jmin(numSamples - snapSampleIndex, samplesPerBlock);
-       // std::cout << "Samples to copy: " << samplesPerBlock << std::endl;
+        int samplesToCopy = jmin (numSamples - snapSampleIndex, samplesPerBlock);
+        // std::cout << "Samples to copy: " << samplesPerBlock << std::endl;
 
         int ch = 0;
 
-        for (auto localChannelIndex : *getParameter("channels")->getValue().getArray())
+        for (auto localChannelIndex : *getParameter ("channels")->getValue().getArray())
         {
-            int globalChannelIndex = getGlobalChannelIndex(stream->getStreamId(), (int)localChannelIndex);
+            int globalChannelIndex = getGlobalChannelIndex (stream->getStreamId(), (int) localChannelIndex);
 
-            snapshotBuffer.copyFrom(ch,                 // destChannel
-                                    snapSampleIndex,    // destSample
-                                    buffer,             // source
-                                    globalChannelIndex, // sourceChannel
-                                    0,                  // source start sample
-                                    samplesToCopy);     // num samples
+            snapshotBuffer.copyFrom (ch, // destChannel
+                                     snapSampleIndex, // destSample
+                                     buffer, // source
+                                     globalChannelIndex, // sourceChannel
+                                     0, // source start sample
+                                     samplesToCopy); // num samples
 
             ch++;
-
         }
-        
+
         snapSampleIndex += samplesToCopy;
 
         if (snapSampleIndex == numSamples)
@@ -181,29 +174,21 @@ void DataSnapshot::process(AudioBuffer<float>& buffer)
             sendChangeMessage();
         }
     }
-	 
 }
 
-
-void DataSnapshot::handleBroadcastMessage(const String& message, const int64 systemTimeMillis)
+void DataSnapshot::handleBroadcastMessage (const String& message, const int64 systemTimeMillis)
 {
-
 }
-
 
 AudioBuffer<float>* DataSnapshot::getSnapshot()
 {
     return &snapshotBuffer;
 }
 
-
-void DataSnapshot::saveCustomParametersToXml(XmlElement* parentElement)
+void DataSnapshot::saveCustomParametersToXml (XmlElement* parentElement)
 {
-
 }
 
-
-void DataSnapshot::loadCustomParametersFromXml(XmlElement* parentElement)
+void DataSnapshot::loadCustomParametersFromXml (XmlElement* parentElement)
 {
-
 }

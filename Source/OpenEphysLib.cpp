@@ -26,7 +26,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 #include <string>
 
-#ifdef WIN32
+#ifdef _WIN32
 #include <Windows.h>
 #define EXPORT __declspec (dllexport)
 #else
@@ -44,7 +44,7 @@ extern "C" EXPORT void getLibInfo (Plugin::LibraryInfo* info)
     The GUI refueses to load plugins with mismatched API versions */
     info->apiVersion = PLUGIN_API_VER;
     info->name = "Data Snapshot"; // Name of the plugin library
-    info->libVersion = "0.1.0"; //Version of the plugin
+    info->libVersion = "0.2.0"; //Version of the plugin
     info->numPlugins = NUM_PLUGINS;
 }
 

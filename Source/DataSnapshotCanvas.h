@@ -122,7 +122,7 @@ private:
 	DataSnapshot* processor;
 
 	/** Image to draw*/
-	std::unique_ptr<Image> image;
+	Image image;
 
 	/** Options bar*/
 	OptionsBar* optionsBar;

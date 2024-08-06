@@ -32,26 +32,23 @@ OptionsBar::OptionsBar(DataSnapshotCanvas* canvas_, DataSnapshot* processor)
     , ParameterEditorOwner(this)
 {
 
-    saveButton = std::make_unique<UtilityButton>("SAVE", Font("Default", 12, Font::plain));
+    saveButton = std::make_unique<UtilityButton>("SAVE");
     saveButton->addListener(this);
     saveButton->setRadius(3.0f);
     saveButton->setClickingTogglesState(false);
     addAndMakeVisible(saveButton.get());
 
-    ComboBoxParameterEditor* rangeSelector = new ComboBoxParameterEditor(canvas->getParameter("voltage_range"), 24, 220);
-    rangeSelector->getLabel()->setColour(Label::textColourId, Colours::white);
+    ComboBoxParameterEditor* rangeSelector = new ComboBoxParameterEditor(canvas->getParameter("voltage_range"), 25, 220);
     rangeSelector->setLayout(ParameterEditor::Layout::nameOnLeft);
-    addParameterEditor(rangeSelector, 20, 7);
+    addParameterEditor(rangeSelector, 20, 12);
 
-    TextBoxParameterEditor* pEditor = new TextBoxParameterEditor(processor->getParameter("window"), 22, 160);
-    pEditor->getLabel()->setColour(Label::textColourId, Colours::white);
+    TextBoxParameterEditor* pEditor = new TextBoxParameterEditor(processor->getParameter("window"), 25, 160);
     pEditor->setLayout(ParameterEditor::Layout::nameOnLeft);
-    addParameterEditor(pEditor, 260, 7);
+    addParameterEditor(pEditor, 260, 12);
 
-    ComboBoxParameterEditor* colorMapEditor = new ComboBoxParameterEditor(canvas->getParameter("color_map"), 24, 160);
-    colorMapEditor->getLabel()->setColour(Label::textColourId, Colours::white);
+    ComboBoxParameterEditor* colorMapEditor = new ComboBoxParameterEditor(canvas->getParameter("color_map"), 25, 160);
     colorMapEditor->setLayout(ParameterEditor::Layout::nameOnLeft);
-    addParameterEditor(colorMapEditor, 450, 7);
+    addParameterEditor(colorMapEditor, 450, 12);
 
 }
 
@@ -77,24 +74,12 @@ void OptionsBar::buttonClicked(Button* button)
 
 void OptionsBar::resized()
 {
-
-    const int verticalOffset = 7;
-
-    saveButton->setBounds(getWidth() - 100, verticalOffset, 70, 25);
-
-    // getParameterEditor("voltage_range")->setTopLeftPosition(20, verticalOffset);
-
-    // getParameterEditor("window")->setTopLeftPosition(255, verticalOffset);
-
-    // getParameterEditor("color_map")->setTopLeftPosition(390, verticalOffset);
+    saveButton->setBounds(getWidth() - 100, 12, 70, 25);
 }
 
 void OptionsBar::paint(Graphics& g)
 {
-    g.fillAll(Colours::black);
-
-    g.setColour(Colours::grey);
-
+    g.fillAll(findColour(ThemeColours::componentBackground));
 }
 
 
@@ -134,9 +119,9 @@ DataSnapshotCanvas::DataSnapshotCanvas(DataSnapshot* processor_)
     optionsBar = new OptionsBar(this, processor);
     addParameterEditorOwner(optionsBar);
 
-    image = std::make_unique<Image>(Image::RGB, 4000, 16, true);
+    image = Image(Image::RGB, 4000, 16, true, SoftwareImageType());
 
-    Graphics g(*image);
+    Graphics g(image);
     g.fillAll(Colour(25,25,85));
 }
 
@@ -150,10 +135,10 @@ void DataSnapshotCanvas::resized()
 void DataSnapshotCanvas::paint(Graphics& g)
 {
 
-	g.fillAll(Colours::black);
+	g.fillAll(findColour(ThemeColours::componentParentBackground));
 
     // draw image
-    g.drawImageWithin(*image, 20, 20, getWidth() - 40, getHeight() - 80, RectanglePlacement::stretchToFit, false);
+    g.drawImageWithin(image, 20, 20, getWidth() - 40, getHeight() - 80, RectanglePlacement::stretchToFit, false);
 
 }
 
@@ -186,7 +171,7 @@ void DataSnapshotCanvas::saveImage(File& file)
     /// save image to file
     FileOutputStream stream(file);
     PNGImageFormat pngWriter;
-    pngWriter.writeImageToStream(*image, stream);
+    pngWriter.writeImageToStream(image, stream);
 }
 
 void DataSnapshotCanvas::changeListenerCallback(ChangeBroadcaster* source)
@@ -195,10 +180,9 @@ void DataSnapshotCanvas::changeListenerCallback(ChangeBroadcaster* source)
     // copy snapshot values
 	AudioBuffer<float>* snapshot = processor->getSnapshot();
 
-    if (image->getWidth() != snapshot->getNumSamples() || image->getHeight() != snapshot->getNumChannels())
+    if (image.getWidth() != snapshot->getNumSamples() || image.getHeight() != snapshot->getNumChannels())
     {
-        image.reset();
-        image = std::make_unique<Image>(Image::RGB, snapshot->getNumSamples(), snapshot->getNumChannels(), true);
+        image = Image(Image::RGB, snapshot->getNumSamples(), snapshot->getNumChannels(), true, SoftwareImageType());
     }
 
     const int numChannels = snapshot->getNumChannels();
@@ -212,7 +196,7 @@ void DataSnapshotCanvas::changeListenerCallback(ChangeBroadcaster* source)
             
             Colour colour = ColorMap::getColorForNormalizedValue(value);
 
-            image->setPixelAt(j, numChannels - i - 1, colour);
+            image.setPixelAt(j, numChannels - i - 1, colour);
 		}
 	}
 

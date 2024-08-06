@@ -43,10 +43,10 @@ DataSnapshotEditor::DataSnapshotEditor(GenericProcessor* p)
     getParameterEditor("channels")->setSize(80, 36);
 
     // Snapshot button
-    takeSnapshotButton = std::make_unique<UtilityButton>("SNAP", titleFont);
+    takeSnapshotButton = std::make_unique<UtilityButton>("SNAP");
     takeSnapshotButton->addListener(this);
     takeSnapshotButton->setRadius(3.0f);
-    takeSnapshotButton->setBounds(110, 80, 75, 35);
+    takeSnapshotButton->setBounds(110, 80, 75, 30);
     addAndMakeVisible(takeSnapshotButton.get());
 
     ChangeBroadcaster* snap = dynamic_cast<ChangeBroadcaster*>(p);

@@ -31,6 +31,7 @@ DataSnapshot::DataSnapshot()
     , currentStream(0)
     , numChannels(0)
     , numSamples(0)
+    , snapSampleIndex(0)
 {
 }
 
@@ -44,11 +45,11 @@ void DataSnapshot::registerParameters()
 {
     addIntParameter(Parameter::PROCESSOR_SCOPE,
         "window", "Window", "Snapshot size in ms",
-        100, 20, 200, false);
+        100, 20, 200);
     
     addSelectedStreamParameter(Parameter::PROCESSOR_SCOPE,
         "current_stream", "Current Stream", "Currently selected stream",
-        {}, 0, false);
+        {}, 0, true, false);
 
     addMaskChannelsParameter(Parameter::PROCESSOR_SCOPE,
         "channels", "Channels", "Snapshot channels");
@@ -184,7 +185,7 @@ void DataSnapshot::process(AudioBuffer<float>& buffer)
 }
 
 
-void DataSnapshot::handleBroadcastMessage(String message)
+void DataSnapshot::handleBroadcastMessage(const String& message, const int64 systemTimeMillis)
 {
 
 }

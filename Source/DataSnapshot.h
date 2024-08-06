@@ -63,7 +63,7 @@ public:
 
 	/** Handles broadcast messages sent during acquisition
 		Called automatically whenever a broadcast message is sent through the signal chain */
-	void handleBroadcastMessage(String message) override;
+	void handleBroadcastMessage(const String& message, const int64 systemTimeMillis) override;
 
 	/** Saving custom settings to XML. This method is not needed to save the state of
 		Parameter objects */

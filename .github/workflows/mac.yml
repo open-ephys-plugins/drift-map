@@ -29,6 +29,9 @@ jobs:
         cd ../..
         git clone https://github.com/open-ephys/plugin-GUI.git --branch $GUI_BRANCH
         cd plugin-GUI/Build && cmake -G "Xcode" ..
+    - uses: maxim-lobanov/setup-xcode@v1
+      with:
+        xcode-version: latest-stable
     - name: build
       run: |
         cd Build
@@ -36,10 +39,10 @@ jobs:
         xcodebuild -configuration Release
 #    - name: test
 #      run: cd build && ctest
-    - name: deploy
+    - name: codesign_deploy
       if: github.ref == 'refs/heads/testing-juce8'
       env:
-        artifactoryApiKey: ${{ secrets.artifactoryApiKey }}
+        ARTIFACTORY_ACCESS_TOKEN: ${{ secrets.ARTIFACTORY_ACCESS_TOKEN }}
         MACOS_CERTIFICATE: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
         MACOS_CERTIFICATE_PWD: ${{ secrets.BUILD_CERTIFICATE_PWD }}
         MACOS_CERTIFICATE_NAME: ${{ secrets.BUILD_CERTIFICATE_NAME }}
@@ -53,7 +56,7 @@ jobs:
         plugin_api=$(grep -rnw ../../plugin-GUI/Source -e '#define PLUGIN_API_VER' | grep -Eo "[0-9]" | tail -1)
         tag=$(grep -w Source/OpenEphysLib.cpp -e 'info->libVersion' | grep -Eo "[0-9]+.[0-9]+.[0-9]+")
         new_plugin_ver=$tag-API$plugin_api
-        
+
         mkdir plugins 
         cp -r $build_dir/*.bundle plugins
 
@@ -103,4 +106,4 @@ jobs:
 
         zipfile=${package}_${new_plugin_ver}.zip
         /usr/bin/ditto -c -k --sequesterRsrc --keepParent plugins $zipfile
-        curl -H "X-JFrog-Art-Api:$artifactoryApiKey" -T $zipfile "https://openephys.jfrog.io/artifactory/DataSnapshot-plugin/mac/$zipfile"
+        curl -H "X-JFrog-Art-Api:$ARTIFACTORY_ACCESS_TOKEN" -T $zipfile "https://openephys.jfrog.io/artifactory/DataSnapshot-plugin/mac/$zipfile"

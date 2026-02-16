@@ -27,24 +27,14 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "DataSnapshotCanvas.h"
 
 DataSnapshotEditor::DataSnapshotEditor (GenericProcessor* p)
-    : VisualizerEditor (p, "Snapshot", 190)
+    : VisualizerEditor (p, "Snapshot", 180)
 {
-    // Stream selector editor
-    addSelectedStreamParameterEditor (Parameter::PROCESSOR_SCOPE, "current_stream", 15, 30);
-    auto currStreamEditor = getParameterEditor ("current_stream");
-    currStreamEditor->setLayout (ParameterEditor::Layout::nameOnTop);
-    currStreamEditor->setSize (160, 36);
-
-    // Channel selector editor
-    addMaskChannelsParameterEditor (Parameter::PROCESSOR_SCOPE, "channels", 15, 75);
-    getParameterEditor ("channels")->setLayout (ParameterEditor::Layout::nameOnTop);
-    getParameterEditor ("channels")->setSize (80, 36);
 
     // Snapshot button
     takeSnapshotButton = std::make_unique<UtilityButton> ("SNAP");
     takeSnapshotButton->addListener (this);
     takeSnapshotButton->setRadius (3.0f);
-    takeSnapshotButton->setBounds (105, 82, 70, 30);
+    takeSnapshotButton->setBounds (58, 55, 70, 30);
     addAndMakeVisible (takeSnapshotButton.get());
 
     ChangeBroadcaster* snap = dynamic_cast<ChangeBroadcaster*> (p);

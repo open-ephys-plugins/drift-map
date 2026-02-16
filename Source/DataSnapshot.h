@@ -26,6 +26,7 @@
 #define DATASNAPSHOT_H_DEFINED
 
 #include <ProcessorHeaders.h>
+#include <unordered_map>
 
 /** 
 	A plugin that includes a canvas for displaying incoming data
@@ -74,17 +75,30 @@ public:
 
     /** Returns a pointer to the snapshot buffer */
     AudioBuffer<float>* getSnapshot();
+    AudioBuffer<float>* getSnapshot (uint16 streamId);
+
+    /** Returns true if the snapshot for the given stream is ready */
+    bool isSnapshotReady (uint16 streamId) const;
 
 private:
+    struct StreamSnapshot
+    {
+        AudioBuffer<float> snapshotBuffer;
+        int numSamples = 0;
+        int numChannels = 0;
+        int writePos = 0;
+        bool pendingSnap = false;
+        bool snapshotReady = false;
+    };
+    void ensureBufferForStream (StreamSnapshot& snapshot);
+    void writeBlockToSnapshot (StreamSnapshot& snapshot, DataStream* stream, AudioBuffer<float>& buffer, int samplesPerBlock);
     /**Check whether data stream exists */
     bool streamExists (uint16 streamId);
-
-    AudioBuffer<float> snapshotBuffer;
-
-    int numSamples;
-    int numChannels;
     uint16 currentStream;
-    int snapSampleIndex;
+    std::unordered_map<uint16, StreamSnapshot> streamSnapshots;
+    AudioBuffer<float> emptySnapshotBuffer;
+
+    static constexpr int defaultWindowMs = 3000;
 
     /** Generates an assertion if this class leaks */
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DataSnapshot);

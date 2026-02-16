@@ -28,6 +28,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 class DataSnapshot;
 class DataSnapshotCanvas;
+class StreamSnapshotView;
 
 /**
 
@@ -59,14 +60,42 @@ private:
 
     DataSnapshotCanvas* canvas;
 };
+/**
+    Per-stream view that renders a snapshot image.
+*/
+class StreamSnapshotView : public Component,
+                           public ChangeListener
+{
+public:
+    StreamSnapshotView (DataSnapshot* processor, DataSnapshotCanvas* owner, uint16 streamId);
+    ~StreamSnapshotView() override;
+
+    void paint (Graphics& g) override;
+    void resized() override {}
+
+    void saveImage (File& file);
+    void refreshFromSnapshot();
+    uint16 getStreamId() const { return streamId; }
+
+    void changeListenerCallback (ChangeBroadcaster* source) override;
+
+private:
+    void updateImageFromSnapshot();
+
+    DataSnapshot* processor;
+    DataSnapshotCanvas* owner;
+    uint16 streamId;
+    Image image;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StreamSnapshotView);
+};
 
 /**
 * 
 	Draws data in real time
 
 */
-class DataSnapshotCanvas : public Visualizer,
-                           public ChangeListener
+class DataSnapshotCanvas : public Visualizer
 {
 public:
     /** Constructor */
@@ -82,7 +111,7 @@ public:
     void refreshState() override {}
 
     /** Updates settings */
-    void updateSettings() override {}
+    void updateSettings() override;
 
     /** Called instead of "repaint()" to avoid re-painting sub-components*/
     void refresh() override {}
@@ -99,8 +128,6 @@ public:
     /** Saves current image */
     void saveImage (File& file);
 
-    /** Handles change message from processor */
-    void changeListenerCallback (ChangeBroadcaster* source) override;
 
     /** Called when a parameter value is updated, to allow plugin-specific responses*/
     void parameterValueChanged (Parameter*) override;
@@ -112,19 +139,21 @@ public:
     void loadCustomParametersFromXml (XmlElement* xml) override;
 
 private:
+    void rebuildTabs();
+    StreamSnapshotView* getCurrentView() const;
     /** Pointer to the processor class */
     DataSnapshot* processor;
 
-    /** Image to draw*/
-    Image image;
-
     /** Options bar*/
     OptionsBar* optionsBar;
+    std::unique_ptr<TabbedComponent> streamTabs;
 
     std::unordered_map<String, float> voltageRanges;
 
     /** Data range (in microvolts) */
     float range = 50;
+
+    friend class StreamSnapshotView;
 
     /** Generates an assertion if this class leaks */
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DataSnapshotCanvas);

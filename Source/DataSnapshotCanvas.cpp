@@ -26,6 +26,96 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "ColorMap.h"
 #include "DataSnapshot.h"
 
+// ---------------------------------------------------------------------------------------------------------------
+StreamSnapshotView::StreamSnapshotView (DataSnapshot* processor_, DataSnapshotCanvas* owner_, uint16 streamId_)
+    : processor (processor_), owner (owner_), streamId (streamId_)
+{
+    if (processor != nullptr)
+        processor->addChangeListener (this);
+
+    updateImageFromSnapshot();
+}
+
+StreamSnapshotView::~StreamSnapshotView()
+{
+    if (processor != nullptr)
+        processor->removeChangeListener (this);
+}
+
+void StreamSnapshotView::changeListenerCallback (ChangeBroadcaster* source)
+{
+
+    LOGD ("Change received in StreamSnapshotView for stream ", streamId);
+
+    if (processor == nullptr)
+        return;
+
+    if (! processor->isSnapshotReady (streamId))
+        return;
+
+    LOGD ("Updating image from snapshot for stream ", streamId);
+
+    updateImageFromSnapshot();
+    repaint();
+}
+
+void StreamSnapshotView::updateImageFromSnapshot()
+{
+    if (processor == nullptr || owner == nullptr)
+        return;
+
+    AudioBuffer<float>* snapshot = processor->getSnapshot (streamId);
+    if (snapshot == nullptr || snapshot->getNumSamples() <= 0 || snapshot->getNumChannels() <= 0)
+    {
+        image = Image (Image::RGB, 1, 1, true, SoftwareImageType());
+        return;
+    }
+
+    if (image.getWidth() != snapshot->getNumSamples() || image.getHeight() != snapshot->getNumChannels())
+    {
+        image = Image (Image::RGB, snapshot->getNumSamples(), snapshot->getNumChannels(), true, SoftwareImageType());
+    }
+
+    const int numChannels = snapshot->getNumChannels();
+    const float range = owner->range;
+
+    for (int i = 0; i < numChannels; i++)
+    {
+        for (int j = 0; j < snapshot->getNumSamples(); j++)
+        {
+            float value = snapshot->getSample (i, j);
+            value = (value + range) / (2 * range);
+
+            Colour colour = ColorMap::getColorForNormalizedValue (value);
+
+            image.setPixelAt (j, numChannels - i - 1, colour);
+        }
+    }
+}
+
+void StreamSnapshotView::paint (Graphics& g)
+{
+    g.fillAll (findColour (ThemeColours::componentParentBackground));
+
+    if (image.isValid())
+    {
+        g.drawImageWithin (image, 20, 20, getWidth() - 40, getHeight() - 40, RectanglePlacement::stretchToFit, false);
+    }
+}
+
+void StreamSnapshotView::saveImage (File& file)
+{
+    FileOutputStream stream (file);
+    PNGImageFormat pngWriter;
+    pngWriter.writeImageToStream (image, stream);
+}
+
+void StreamSnapshotView::refreshFromSnapshot()
+{
+    updateImageFromSnapshot();
+    repaint();
+}
+
 OptionsBar::OptionsBar (DataSnapshotCanvas* canvas_, DataSnapshot* processor)
     : canvas (canvas_), ParameterEditorOwner (this)
 {
@@ -83,8 +173,6 @@ DataSnapshotCanvas::DataSnapshotCanvas (DataSnapshot* processor_)
     : Visualizer (processor_),
       processor (processor_)
 {
-    DataSnapshot* ds = dynamic_cast<DataSnapshot*> (processor_);
-    ds->addChangeListener (this);
 
     Array<String> colorMaps;
     colorMaps.add ("Greys");
@@ -113,24 +201,26 @@ DataSnapshotCanvas::DataSnapshotCanvas (DataSnapshot* processor_)
 
     optionsBar = new OptionsBar (this, processor);
     addParameterEditorOwner (optionsBar);
-
-    image = Image (Image::RGB, 4000, 16, true, SoftwareImageType());
-
-    Graphics g (image);
-    g.fillAll (Colour (25, 25, 85));
+    streamTabs = std::make_unique<TabbedComponent> (TabbedButtonBar::TabsAtTop);
+    addAndMakeVisible (streamTabs.get());
+    rebuildTabs();
 }
 
 void DataSnapshotCanvas::resized()
 {
-    optionsBar->setBounds (0, getHeight() - 50, getWidth(), 50);
+    const int optionsHeight = 50;
+    optionsBar->setBounds (0, getHeight() - optionsHeight, getWidth(), optionsHeight);
+    streamTabs->setBounds (0, 0, getWidth(), getHeight() - optionsHeight);
 }
 
 void DataSnapshotCanvas::paint (Graphics& g)
 {
     g.fillAll (findColour (ThemeColours::componentParentBackground));
+}
 
-    // draw image
-    g.drawImageWithin (image, 20, 20, getWidth() - 40, getHeight() - 90, RectanglePlacement::stretchToFit, false);
+void DataSnapshotCanvas::setRange (int rangeMicrovolts)
+{
+    range = (float) rangeMicrovolts;
 }
 
 void DataSnapshotCanvas::parameterValueChanged (Parameter* param)
@@ -147,6 +237,15 @@ void DataSnapshotCanvas::parameterValueChanged (Parameter* param)
         String rangeValue = param->getValueAsString();
         range = voltageRanges[rangeValue];
     }
+
+    for (int i = 0; i < streamTabs->getNumTabs(); i++)
+    {
+        auto* view = dynamic_cast<StreamSnapshotView*> (streamTabs->getTabContentComponent (i));
+        if (view != nullptr)
+        {
+            view->refreshFromSnapshot();
+        }
+    }
 }
 
 void DataSnapshotCanvas::setColorMap (int colormapIndex)
@@ -157,38 +256,14 @@ void DataSnapshotCanvas::setColorMap (int colormapIndex)
 
 void DataSnapshotCanvas::saveImage (File& file)
 {
-    /// save image to file
-    FileOutputStream stream (file);
-    PNGImageFormat pngWriter;
-    pngWriter.writeImageToStream (image, stream);
+    auto* view = getCurrentView();
+    if (view != nullptr)
+        view->saveImage (file);
 }
 
-void DataSnapshotCanvas::changeListenerCallback (ChangeBroadcaster* source)
+void DataSnapshotCanvas::updateSettings()
 {
-    // copy snapshot values
-    AudioBuffer<float>* snapshot = processor->getSnapshot();
-
-    if (image.getWidth() != snapshot->getNumSamples() || image.getHeight() != snapshot->getNumChannels())
-    {
-        image = Image (Image::RGB, snapshot->getNumSamples(), snapshot->getNumChannels(), true, SoftwareImageType());
-    }
-
-    const int numChannels = snapshot->getNumChannels();
-
-    for (int i = 0; i < numChannels; i++)
-    {
-        for (int j = 0; j < snapshot->getNumSamples(); j++)
-        {
-            float value = snapshot->getSample (i, j);
-            value = (value + range) / (2 * range);
-
-            Colour colour = ColorMap::getColorForNormalizedValue (value);
-
-            image.setPixelAt (j, numChannels - i - 1, colour);
-        }
-    }
-
-    repaint();
+    rebuildTabs();
 }
 
 void DataSnapshotCanvas::saveCustomParametersToXml (XmlElement* xml)
@@ -197,4 +272,30 @@ void DataSnapshotCanvas::saveCustomParametersToXml (XmlElement* xml)
 
 void DataSnapshotCanvas::loadCustomParametersFromXml (XmlElement* xml)
 {
+}
+
+void DataSnapshotCanvas::rebuildTabs()
+{
+    streamTabs->clearTabs();
+
+    auto streams = processor->getDataStreams();
+    for (auto stream : streams)
+    {
+        const uint16 streamId = stream->getStreamId();
+        String label = stream->getName();
+        if (label.isEmpty())
+            label = "Stream";
+        label << " (" << String (stream->getSourceNodeId()) << ")";
+
+        auto* view = new StreamSnapshotView (processor, this, streamId);
+        streamTabs->addTab (label, findColour (ThemeColours::componentParentBackground), view, true);
+    }
+}
+
+StreamSnapshotView* DataSnapshotCanvas::getCurrentView() const
+{
+    if (streamTabs == nullptr)
+        return nullptr;
+
+    return dynamic_cast<StreamSnapshotView*> (streamTabs->getCurrentContentComponent());
 }

@@ -29,35 +29,10 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 DriftMapEditor::DriftMapEditor (GenericProcessor* p)
     : VisualizerEditor (p, "Drift Map", 180)
 {
-
-    // Snapshot button
-    takeSnapshotButton = std::make_unique<UtilityButton> ("SNAP");
-    takeSnapshotButton->addListener (this);
-    takeSnapshotButton->setRadius (3.0f);
-    takeSnapshotButton->setBounds (58, 55, 70, 30);
-    addAndMakeVisible (takeSnapshotButton.get());
-
-    ChangeBroadcaster* snap = dynamic_cast<ChangeBroadcaster*> (p);
-    snap->addChangeListener (this);
 }
 
 Visualizer* DriftMapEditor::createNewCanvas()
 {
     return new DriftMapCanvas ((DriftMap*) getProcessor());
     ;
-}
-
-void DriftMapEditor::buttonClicked (Button* button)
-{
-    if (button == takeSnapshotButton.get() && CoreServices::getAcquisitionStatus())
-    {
-        NotificationParameter* snapParam = (NotificationParameter*) getProcessor()->getParameter ("snap");
-        snapParam->triggerNotification();
-        takeSnapshotButton->setEnabledState (false);
-    }
-}
-
-void DriftMapEditor::changeListenerCallback (ChangeBroadcaster* source)
-{
-    takeSnapshotButton->setEnabledState (true);
 }

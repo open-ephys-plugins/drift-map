@@ -26,7 +26,7 @@
 #include "DriftMapEditor.h"
 
 DriftMap::DriftMap()
-    : GenericProcessor ("Drift Map"), currentStream (0)
+    : GenericProcessor ("Drift Map")
 {
 }
 
@@ -36,19 +36,21 @@ DriftMap::~DriftMap()
 
 void DriftMap::registerParameters()
 {
-    addNotificationParameter (Parameter::PROCESSOR_SCOPE,
-                              "snap",
-                              "Snap",
-                              "Used to trigger snapshots",
-                              false);
+    addIntParameter (Parameter::PROCESSOR_SCOPE,
+                     "threshold_uv",
+                     "Threshold (uV)",
+                     "Negative peak threshold in microvolts",
+                     defaultThresholdUv,
+                     -500,
+                     -5);
 
     addIntParameter (Parameter::PROCESSOR_SCOPE,
-                     "window",
-                     "Window",
-                     "Duration of snapshot window in milliseconds",
-                     defaultWindowMs,
-                     50,
-                     500);
+                     "refractory_ms",
+                     "Refractory (ms)",
+                     "Minimum separation between peaks on a channel",
+                     defaultRefractoryMs,
+                     0,
+                     20);
 }
 
 AudioProcessorEditor* DriftMap::createEditor()
@@ -59,101 +61,135 @@ AudioProcessorEditor* DriftMap::createEditor()
 
 void DriftMap::updateSettings()
 {
-    std::unordered_map<uint16, StreamSnapshot> updatedSnapshots;
+    std::unordered_map<uint16, StreamPeaks> updatedStates;
 
-    auto streams = getDataStreams();
-    int windowMs = (int) getParameter ("window")->getValue();
-
-    for (auto stream : streams)
-    {
-        StreamSnapshot snapshot;
-        snapshot.numChannels = stream->getChannelCount();
-        snapshot.numSamples = int (stream->getSampleRate() * ((float) windowMs / 1000));
-        snapshot.writePos = 0;
-        snapshot.pendingSnap = false;
-
-        updatedSnapshots[stream->getStreamId()] = std::move (snapshot);
-    }
-
-    streamSnapshots = std::move (updatedSnapshots);
-
-    if (streams.size() > 0)
-        currentStream = streams[0]->getStreamId();
-    else
-        currentStream = 0;
-}
-
-bool DriftMap::streamExists (uint16 streamId)
-{
     for (auto stream : getDataStreams())
     {
-        if (stream->getStreamId() == streamId)
-            return true;
+        StreamPeaks streamState;
+        streamState.numChannels = stream->getChannelCount();
+        streamState.sampleRate = stream->getSampleRate();
+        streamState.channelStates.resize ((size_t) streamState.numChannels);
+        streamState.pendingPeaks.reserve (maxPendingPeaksPerStream);
+        streamState.pendingLock = std::make_unique<CriticalSection>();
+
+        updatedStates[stream->getStreamId()] = std::move (streamState);
     }
 
-    return false;
+    streamPeaks = std::move (updatedStates);
 }
 
 void DriftMap::parameterValueChanged (Parameter* parameter)
 {
-    if (parameter->getName().equalsIgnoreCase ("snap") && CoreServices::getAcquisitionStatus())
+    if (parameter->getName().equalsIgnoreCase ("threshold_uv")
+        || parameter->getName().equalsIgnoreCase ("refractory_ms"))
     {
-        LOGD ("Snapshot triggered");
-
-        for (auto& entry : streamSnapshots)
-        {
-            entry.second.pendingSnap = true;
-            entry.second.snapshotReady = false;
-            entry.second.writePos = 0;
-        }
         return;
     }
+}
 
-    if (parameter->getName().equalsIgnoreCase ("window"))
-    {
-        LOGD ("Window parameter changed, updating snapshot settings");
+bool DriftMap::startAcquisition()
+{
 
-        int windowMs = (int) parameter->getValue();
-        for (auto& entry : streamSnapshots)
-        {
-            auto stream = getDataStream (entry.first);
-            if (stream != nullptr)
-            {
-                entry.second.numSamples = int (stream->getSampleRate() * ((float) windowMs / 1000));
-                entry.second.writePos = 0;
-                entry.second.pendingSnap = false;
-            }
-        }
-    }
+    DriftMapEditor* editor = (DriftMapEditor*) getEditor();
+    editor->enable();
+
+    clearDriftData();
+    return true;
+}
+
+bool DriftMap::stopAcquisition()
+{
+    DriftMapEditor* editor = (DriftMapEditor*) getEditor();
+    editor->disable();
+
+    clearDriftData();
+    return true;
+}
+
+void DriftMap::appendDetectedPeaks (StreamPeaks& streamState, const std::vector<PeakEvent>& detectedPeaks)
+{
+    if (detectedPeaks.empty())
+        return;
+
+    const ScopedLock lock (*streamState.pendingLock);
+
+
+    const size_t currentSize = streamState.pendingPeaks.size();
+    if (currentSize >= maxPendingPeaksPerStream)
+        return;
+
+    const size_t remaining = maxPendingPeaksPerStream - currentSize;
+    const size_t toCopy = jmin (remaining, detectedPeaks.size());
+
+    streamState.pendingPeaks.insert (streamState.pendingPeaks.end(),
+                                     detectedPeaks.begin(),
+                                     detectedPeaks.begin() + (int64) toCopy);
 }
 
 void DriftMap::process (AudioBuffer<float>& buffer)
 {
-    for (auto& entry : streamSnapshots)
+    const float thresholdUv = (float) getParameter ("threshold_uv")->getValue();
+    const int refractoryMs = (int) getParameter ("refractory_ms")->getValue();
+
+    for (auto& entry : streamPeaks)
     {
         const uint16 streamId = entry.first;
-        StreamSnapshot& snapshot = entry.second;
+        StreamPeaks& streamState = entry.second;
 
-        if (! snapshot.pendingSnap)
-            continue;
-
-        int samplesPerBlock = getNumSamplesInBlock (streamId);
         DataStream* stream = getDataStream (streamId);
-        if (stream == nullptr || snapshot.numChannels == 0 || snapshot.numSamples == 0)
+        if (stream == nullptr || streamState.numChannels <= 0)
             continue;
 
-        ensureBufferForStream (snapshot);
-        writeBlockToSnapshot (snapshot, stream, buffer, samplesPerBlock);
+        const int samplesPerBlock = getNumSamplesInBlock (streamId);
+        if (samplesPerBlock <= 0)
+            continue;
 
-        // Check if buffer is now full
-        if (snapshot.writePos >= snapshot.numSamples)
+        if ((int) streamState.channelStates.size() != streamState.numChannels)
+            streamState.channelStates.resize ((size_t) streamState.numChannels);
+
+        const int64 blockFirstSample = getFirstSampleNumberForBlock (streamId);
+        const int refractorySamples = jmax (0, (int) ((refractoryMs / 1000.0) * streamState.sampleRate));
+
+        std::vector<PeakEvent> detectedPeaks;
+        detectedPeaks.reserve ((size_t) (samplesPerBlock * jmax (1, streamState.numChannels / 32)));
+
+        for (int sample = 0; sample < samplesPerBlock; ++sample)
         {
-            LOGD ("Finishing snapshot for stream ", streamId);
+            const int64 sampleNumber = blockFirstSample + sample;
 
-            snapshot.pendingSnap = false;
-            snapshot.snapshotReady = true;
-            sendChangeMessage();
+            for (int localChannel = 0; localChannel < streamState.numChannels; ++localChannel)
+            {
+                ChannelPeakState& channelState = streamState.channelStates[(size_t) localChannel];
+
+                const int globalChannel = getGlobalChannelIndex (streamId, localChannel);
+                const float currentSample = buffer.getSample (globalChannel, sample);
+
+                if (channelState.initCount >= 2)
+                {
+                    const bool localMin = (channelState.prev2 > channelState.prev1)
+                                          && (channelState.prev1 <= currentSample);
+                    const bool belowThreshold = channelState.prev1 < thresholdUv;
+                    const bool outsideRefractory = (channelState.prev1SampleNumber - channelState.lastPeakSampleNumber) > refractorySamples;
+
+                    if (localMin && belowThreshold && outsideRefractory)
+                    {
+                        PeakEvent peak;
+                        peak.sampleNumber = channelState.prev1SampleNumber;
+                        peak.channel = (uint16) localChannel;
+                        detectedPeaks.push_back (peak);
+                        channelState.lastPeakSampleNumber = channelState.prev1SampleNumber;
+                    }
+                }
+
+                channelState.prev2 = channelState.prev1;
+                channelState.prev1 = currentSample;
+                channelState.prev1SampleNumber = sampleNumber;
+                if (channelState.initCount < 2)
+                    channelState.initCount++;
+            }
         }
+
+        appendDetectedPeaks (streamState, detectedPeaks);
     }
 }
 
@@ -161,66 +197,58 @@ void DriftMap::handleBroadcastMessage (const String& message, const int64 system
 {
 }
 
-AudioBuffer<float>* DriftMap::getSnapshot()
+bool DriftMap::drainPeaks (uint16 streamId, std::vector<PeakEvent>& outPeaks)
 {
-    return getSnapshot (currentStream);
-}
+    outPeaks.clear();
 
-AudioBuffer<float>* DriftMap::getSnapshot (uint16 streamId)
-{
-    auto it = streamSnapshots.find (streamId);
-    if (it == streamSnapshots.end())
-        return &emptySnapshotBuffer;
-
-    it->second.snapshotReady = false;
-    return &it->second.snapshotBuffer;
-}
-
-bool DriftMap::isSnapshotReady (uint16 streamId) const
-{
-    auto it = streamSnapshots.find (streamId);
-    if (it == streamSnapshots.end())
+    auto it = streamPeaks.find (streamId);
+    if (it == streamPeaks.end())
         return false;
-    return it->second.snapshotReady;
+
+    StreamPeaks& streamState = it->second;
+    const ScopedLock lock (*streamState.pendingLock);
+    outPeaks.swap (streamState.pendingPeaks);
+    return true;
 }
 
-void DriftMap::ensureBufferForStream (StreamSnapshot& snapshot)
+int DriftMap::getNumChannelsForStream (uint16 streamId) const
 {
-    if (snapshot.snapshotBuffer.getNumChannels() != snapshot.numChannels
-        || snapshot.snapshotBuffer.getNumSamples() != snapshot.numSamples)
-    {
-        snapshot.snapshotBuffer.setSize (snapshot.numChannels, snapshot.numSamples);
-        snapshot.snapshotBuffer.clear();
-        snapshot.writePos = 0;
-    }
+    auto it = streamPeaks.find (streamId);
+    if (it == streamPeaks.end())
+        return 0;
+
+    return it->second.numChannels;
 }
 
-void DriftMap::writeBlockToSnapshot (StreamSnapshot& snapshot, DataStream* stream, AudioBuffer<float>& buffer, int samplesPerBlock)
+double DriftMap::getSampleRateForStream (uint16 streamId) const
 {
-    if (snapshot.numSamples <= 0)
-        return;
+    auto it = streamPeaks.find (streamId);
+    if (it == streamPeaks.end())
+        return 0.0;
 
-    LOGD ("Writing block to snapshot: streamId=", stream->getStreamId(), ", writePos=", snapshot.writePos, ", samplesPerBlock=", samplesPerBlock);
+    return it->second.sampleRate;
+}
 
-    // Calculate how many samples we can write (don't exceed buffer size)
-    const int spaceRemaining = snapshot.numSamples - snapshot.writePos;
-    const int samplesToWrite = jmin (samplesPerBlock, spaceRemaining);
-
-    if (samplesToWrite <= 0)
-        return;
-
-    for (int localChannelIndex = 0; localChannelIndex < snapshot.numChannels; localChannelIndex++)
+void DriftMap::clearDriftData()
+{
+    for (auto& entry : streamPeaks)
     {
-        int globalChannelIndex = getGlobalChannelIndex (stream->getStreamId(), localChannelIndex);
-        snapshot.snapshotBuffer.copyFrom (localChannelIndex, // destChannel
-                                          snapshot.writePos, // destSample
-                                          buffer, // source
-                                          globalChannelIndex, // sourceChannel
-                                          0, // source start sample
-                                          samplesToWrite); // num samples
-    }
+        StreamPeaks& streamState = entry.second;
 
-    snapshot.writePos += samplesToWrite;
+        {
+            const ScopedLock lock (*streamState.pendingLock);
+            streamState.pendingPeaks.clear();
+        }
+
+        for (auto& channelState : streamState.channelStates)
+        {
+            channelState.initCount = 0;
+            channelState.prev2 = 0.0f;
+            channelState.prev1 = 0.0f;
+            channelState.prev1SampleNumber = -1;
+            channelState.lastPeakSampleNumber = std::numeric_limits<int64>::lowest() / 2;
+        }
+    }
 }
 
 void DriftMap::saveCustomParametersToXml (XmlElement* parentElement)

@@ -23,144 +23,207 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 #include "DriftMapCanvas.h"
 
-#include "ColorMap.h"
 #include "DriftMap.h"
+#include <algorithm>
 
-// ---------------------------------------------------------------------------------------------------------------
-StreamSnapshotView::StreamSnapshotView (DriftMap* processor_, DriftMapCanvas* owner_, uint16 streamId_)
+#include <array>
+
+StreamScatterView::StreamScatterView (DriftMap* processor_, DriftMapCanvas* owner_, uint16 streamId_)
     : processor (processor_), owner (owner_), streamId (streamId_)
 {
-    if (processor != nullptr)
-        processor->addChangeListener (this);
-
-    updateImageFromSnapshot();
 }
 
-StreamSnapshotView::~StreamSnapshotView()
+void StreamScatterView::appendPeaksFromProcessor()
 {
-    if (processor != nullptr)
-        processor->removeChangeListener (this);
+    if (processor == nullptr)
+        return;
+
+    std::vector<DriftMap::PeakEvent> newPeaks;
+    if (! processor->drainPeaks (streamId, newPeaks))
+        return;
+
+    if (newPeaks.empty())
+        return;
+
+    latestSample = jmax (latestSample, newPeaks.back().sampleNumber);
+
+    const size_t oldSize = displayPeaks.size();
+    displayPeaks.resize (oldSize + newPeaks.size());
+    std::copy (newPeaks.begin(),
+               newPeaks.end(),
+               displayPeaks.begin() + (int64) oldSize);
 }
 
-void StreamSnapshotView::changeListenerCallback (ChangeBroadcaster* source)
+void StreamScatterView::pruneHistory()
 {
+    if (processor == nullptr || displayPeaks.empty())
+        return;
 
-    LOGD ("Change received in StreamSnapshotView for stream ", streamId);
+    const double sampleRate = processor->getSampleRateForStream (streamId);
+    if (sampleRate <= 0.0)
+        return;
+
+    const int64 windowSamples = (int64) (sampleRate * owner->getDisplayWindowSeconds());
+    if (windowSamples <= 0)
+        return;
+
+    const int64 keepAfter = jmax ((int64) 0, latestSample - (windowSamples * 2));
+
+    auto it = std::lower_bound (displayPeaks.begin(),
+                                displayPeaks.end(),
+                                keepAfter,
+                                [] (const DriftMap::PeakEvent& peak, int64 sample) { return peak.sampleNumber < sample; });
+
+    if (it != displayPeaks.begin())
+        displayPeaks.erase (displayPeaks.begin(), it);
+
+    constexpr size_t maxDisplayPeaks = 1000000;
+    if (displayPeaks.size() > maxDisplayPeaks)
+    {
+        const size_t removeCount = displayPeaks.size() - maxDisplayPeaks;
+        displayPeaks.erase (displayPeaks.begin(), displayPeaks.begin() + (int64) removeCount);
+    }
+}
+
+void StreamScatterView::refreshFromProcessor()
+{
+    appendPeaksFromProcessor();
+    pruneHistory();
+    repaint();
+}
+
+void StreamScatterView::clearHistory()
+{
+    displayPeaks.clear();
+    latestSample = 0;
+    repaint();
+}
+
+void StreamScatterView::paint (Graphics& g)
+{
+    g.fillAll (findColour (ThemeColours::componentParentBackground));
+
+    Rectangle<int> plotBounds = getLocalBounds().reduced (16);
+    g.setColour (Colours::darkgrey);
+    g.drawRect (plotBounds);
 
     if (processor == nullptr)
         return;
 
-    if (! processor->isSnapshotReady (streamId))
+    const int numChannels = processor->getNumChannelsForStream (streamId);
+    const double sampleRate = processor->getSampleRateForStream (streamId);
+
+    if (numChannels <= 0 || sampleRate <= 0.0 || displayPeaks.empty() || plotBounds.getWidth() < 2 || plotBounds.getHeight() < 2)
         return;
 
-    LOGD ("Updating image from snapshot for stream ", streamId);
-
-    updateImageFromSnapshot();
-    repaint();
-}
-
-void StreamSnapshotView::updateImageFromSnapshot()
-{
-    if (processor == nullptr || owner == nullptr)
+    const int windowSeconds = owner->getDisplayWindowSeconds();
+    const int64 windowSamples = (int64) (windowSeconds * sampleRate);
+    if (windowSamples <= 0)
         return;
 
-    AudioBuffer<float>* snapshot = processor->getSnapshot (streamId);
-    if (snapshot == nullptr || snapshot->getNumSamples() <= 0 || snapshot->getNumChannels() <= 0)
-    {
-        image = Image (Image::RGB, 1, 1, true, SoftwareImageType());
-        return;
-    }
+    const int64 xMax = jmax ((int64) 1, latestSample);
+    const int64 xMin = jmax ((int64) 0, xMax - windowSamples);
+    const int64 xSpan = jmax ((int64) 1, xMax - xMin);
 
-    if (image.getWidth() != snapshot->getNumSamples() || image.getHeight() != snapshot->getNumChannels())
-    {
-        image = Image (Image::RGB, snapshot->getNumSamples(), snapshot->getNumChannels(), true, SoftwareImageType());
-    }
+    auto startIt = std::lower_bound (displayPeaks.begin(),
+                                     displayPeaks.end(),
+                                     xMin,
+                                     [] (const DriftMap::PeakEvent& peak, int64 sample) { return peak.sampleNumber < sample; });
 
-    const int numChannels = snapshot->getNumChannels();
-    const float range = owner->range;
-
-    for (int i = 0; i < numChannels; i++)
+    struct ColumnPoints
     {
-        for (int j = 0; j < snapshot->getNumSamples(); j++)
+        std::array<int, 4> y {};
+        int count = 0;
+    };
+
+    std::vector<ColumnPoints> columns ((size_t) plotBounds.getWidth());
+
+    for (auto it = startIt; it != displayPeaks.end(); ++it)
+    {
+        const DriftMap::PeakEvent& peak = *it;
+        if (peak.sampleNumber > xMax)
+            break;
+
+        const int x = (int) (((peak.sampleNumber - xMin) * (plotBounds.getWidth() - 1)) / xSpan);
+        if (x < 0 || x >= plotBounds.getWidth())
+            continue;
+
+        int yPixel = plotBounds.getBottom() - 1;
+        if (numChannels > 1)
         {
-            float value = snapshot->getSample (i, j);
-            value = (value + range) / (2 * range);
+            const double yNorm = (double) peak.channel / (double) (numChannels - 1);
+            yPixel = plotBounds.getBottom() - 1 - (int) (yNorm * (plotBounds.getHeight() - 1));
+        }
 
-            Colour colour = ColorMap::getColorForNormalizedValue (value);
+        ColumnPoints& column = columns[(size_t) x];
 
-            image.setPixelAt (j, numChannels - i - 1, colour);
+        bool alreadyPresent = false;
+        for (int i = 0; i < column.count; ++i)
+        {
+            if (column.y[(size_t) i] == yPixel)
+            {
+                alreadyPresent = true;
+                break;
+            }
+        }
+
+        if (alreadyPresent)
+            continue;
+
+        if (column.count < (int) column.y.size())
+        {
+            column.y[(size_t) column.count++] = yPixel;
         }
     }
-}
 
-void StreamSnapshotView::paint (Graphics& g)
-{
-    g.fillAll (findColour (ThemeColours::componentParentBackground));
-
-    if (image.isValid())
+    g.setColour (Colours::white.withAlpha (0.85f));
+    for (int x = 0; x < (int) columns.size(); ++x)
     {
-        g.drawImageWithin (image, 20, 20, getWidth() - 40, getHeight() - 40, RectanglePlacement::stretchToFit, false);
+        const ColumnPoints& column = columns[(size_t) x];
+        for (int i = 0; i < column.count; ++i)
+            g.fillRect (plotBounds.getX() + x, column.y[(size_t) i], 1, 1);
     }
 }
 
-void StreamSnapshotView::saveImage (File& file)
+OptionsBar::OptionsBar (DriftMapCanvas* canvas_, DriftMap* processor_)
+    : canvas (canvas_),
+      processor (processor_),
+      ParameterEditorOwner (this)
 {
-    FileOutputStream stream (file);
-    PNGImageFormat pngWriter;
-    pngWriter.writeImageToStream (image, stream);
-}
+    clearButton = std::make_unique<UtilityButton> ("CLEAR");
+    clearButton->addListener (this);
+    clearButton->setRadius (3.0f);
+    clearButton->setClickingTogglesState (false);
+    addAndMakeVisible (clearButton.get());
 
-void StreamSnapshotView::refreshFromSnapshot()
-{
-    updateImageFromSnapshot();
-    repaint();
-}
+    auto* thresholdEditor = new TextBoxParameterEditor (processor->getParameter ("threshold_uv"), 25, 210);
+    thresholdEditor->setLayout (ParameterEditor::Layout::nameOnLeft);
+    addParameterEditor (thresholdEditor, 20, 12);
 
-OptionsBar::OptionsBar (DriftMapCanvas* canvas_, DriftMap* processor)
-    : canvas (canvas_), ParameterEditorOwner (this)
-{
-    saveButton = std::make_unique<UtilityButton> ("SAVE");
-    saveButton->addListener (this);
-    saveButton->setRadius (3.0f);
-    saveButton->setClickingTogglesState (false);
-    addAndMakeVisible (saveButton.get());
+    auto* refractoryEditor = new TextBoxParameterEditor (processor->getParameter ("refractory_ms"), 25, 200);
+    refractoryEditor->setLayout (ParameterEditor::Layout::nameOnLeft);
+    addParameterEditor (refractoryEditor, 250, 12);
 
-    ComboBoxParameterEditor* rangeSelector = new ComboBoxParameterEditor (canvas->getParameter ("voltage_range"), 25, 220);
-    rangeSelector->setLayout (ParameterEditor::Layout::nameOnLeft);
-    addParameterEditor (rangeSelector, 20, 12);
-
-    TextBoxParameterEditor* pEditor = new TextBoxParameterEditor (processor->getParameter ("window"), 25, 160);
-    pEditor->setLayout (ParameterEditor::Layout::nameOnLeft);
-    addParameterEditor (pEditor, 260, 12);
-
-    ComboBoxParameterEditor* colorMapEditor = new ComboBoxParameterEditor (canvas->getParameter ("color_map"), 25, 160);
-    colorMapEditor->setLayout (ParameterEditor::Layout::nameOnLeft);
-    addParameterEditor (colorMapEditor, 450, 12);
+    auto* windowEditor = new ComboBoxParameterEditor (canvas->getParameter ("display_window_s"), 25, 200);
+    windowEditor->setLayout (ParameterEditor::Layout::nameOnLeft);
+    addParameterEditor (windowEditor, 470, 12);
 }
 
 void OptionsBar::buttonClicked (Button* button)
 {
-    if (button == saveButton.get())
+    if (button == clearButton.get())
     {
-        FileChooser chooser ("Save snapshot to file...",
-                             File(),
-                             "*.png");
+        if (processor != nullptr)
+            processor->clearDriftData();
 
-        if (chooser.browseForFileToSave (true))
-        {
-            File file = chooser.getResult();
-
-            if (file.exists())
-                file.deleteFile();
-
-            canvas->saveImage (file);
-        }
+        if (canvas != nullptr)
+            canvas->clearAllViews();
     }
 }
 
 void OptionsBar::resized()
 {
-    saveButton->setBounds (getWidth() - 100, 12, 70, 25);
+    clearButton->setBounds (getWidth() - 100, 12, 70, 25);
 }
 
 void OptionsBar::paint (Graphics& g)
@@ -168,41 +231,30 @@ void OptionsBar::paint (Graphics& g)
     g.fillAll (findColour (ThemeColours::componentBackground));
 }
 
-// ---------------------------------------------------------------------------------------------------------------
 DriftMapCanvas::DriftMapCanvas (DriftMap* processor_)
     : Visualizer (processor_),
       processor (processor_)
 {
+    refreshRate = 10;
 
-    Array<String> colorMaps;
-    colorMaps.add ("Greys");
-    colorMaps.add ("Cividis");
-    colorMaps.add ("Viridis");
-    colorMaps.add ("RdGy");
-    colorMaps.add ("RdBu");
-    addCategoricalParameter ("color_map", "Color Map", "Color map for drift map", colorMaps, 0);
+    Array<String> windows;
+    windows.add ("10");
+    windows.add ("30");
+    windows.add ("60");
+    windows.add ("300");
 
-    Array<String> ranges;
-    ranges.add ("+/- 25 uV");
-    ranges.add ("+/- 50 uV");
-    ranges.add ("+/- 75 uV");
-    ranges.add ("+/- 100 uV");
-    ranges.add ("+/- 250 uV");
-    ranges.add ("+/- 500 uV");
-    ranges.add ("+/- 1000 uV");
-    ranges.add ("+/- 2000 uV");
-
-    for (auto vRange : ranges)
-    {
-        voltageRanges[vRange] = vRange.substring (4, vRange.length() - 3).getIntValue();
-    }
-
-    addCategoricalParameter ("voltage_range", "Voltage Range", "Voltage Range for drift map", ranges, 1);
+    addCategoricalParameter ("display_window_s",
+                             "Display Window (s)",
+                             "Visible time range in seconds",
+                             windows,
+                             2);
 
     optionsBar = new OptionsBar (this, processor);
     addParameterEditorOwner (optionsBar);
+
     streamTabs = std::make_unique<TabbedComponent> (TabbedButtonBar::TabsAtTop);
     addAndMakeVisible (streamTabs.get());
+
     rebuildTabs();
 }
 
@@ -218,47 +270,24 @@ void DriftMapCanvas::paint (Graphics& g)
     g.fillAll (findColour (ThemeColours::componentParentBackground));
 }
 
-void DriftMapCanvas::setRange (int rangeMicrovolts)
+void DriftMapCanvas::refresh()
 {
-    range = (float) rangeMicrovolts;
+    auto* view = getCurrentView();
+    if (view != nullptr)
+        view->refreshFromProcessor();
 }
 
 void DriftMapCanvas::parameterValueChanged (Parameter* param)
 {
-    //LOGD("Changing parameter: ", param->getName());
-
-    if (param->getName().equalsIgnoreCase ("color_map"))
+    if (param->getName().equalsIgnoreCase ("display_window_s"))
     {
-        int colormapIndex = (int) param->getValue() + 1;
-        ColorMap::setColorMap ((ColorMapId) colormapIndex);
-    }
-    else if (param->getName().equalsIgnoreCase ("voltage_range"))
-    {
-        String rangeValue = param->getValueAsString();
-        range = voltageRanges[rangeValue];
-    }
-
-    for (int i = 0; i < streamTabs->getNumTabs(); i++)
-    {
-        auto* view = dynamic_cast<StreamSnapshotView*> (streamTabs->getTabContentComponent (i));
-        if (view != nullptr)
+        for (int i = 0; i < streamTabs->getNumTabs(); ++i)
         {
-            view->refreshFromSnapshot();
+            auto* view = dynamic_cast<StreamScatterView*> (streamTabs->getTabContentComponent (i));
+            if (view != nullptr)
+                view->repaint();
         }
     }
-}
-
-void DriftMapCanvas::setColorMap (int colormapIndex)
-{
-    // set colormap
-    ColorMap::setColorMap ((ColorMapId) colormapIndex);
-}
-
-void DriftMapCanvas::saveImage (File& file)
-{
-    auto* view = getCurrentView();
-    if (view != nullptr)
-        view->saveImage (file);
 }
 
 void DriftMapCanvas::updateSettings()
@@ -274,6 +303,26 @@ void DriftMapCanvas::loadCustomParametersFromXml (XmlElement* xml)
 {
 }
 
+int DriftMapCanvas::getDisplayWindowSeconds() const
+{
+    auto* windowParam = getParameter ("display_window_s");
+    if (windowParam == nullptr)
+        return 60;
+
+    const int windowSeconds = windowParam->getValueAsString().getIntValue();
+    return windowSeconds > 0 ? windowSeconds : 60;
+}
+
+void DriftMapCanvas::clearAllViews()
+{
+    for (int i = 0; i < streamTabs->getNumTabs(); ++i)
+    {
+        auto* view = dynamic_cast<StreamScatterView*> (streamTabs->getTabContentComponent (i));
+        if (view != nullptr)
+            view->clearHistory();
+    }
+}
+
 void DriftMapCanvas::rebuildTabs()
 {
     streamTabs->clearTabs();
@@ -287,15 +336,15 @@ void DriftMapCanvas::rebuildTabs()
             label = "Stream";
         label << " (" << String (stream->getSourceNodeId()) << ")";
 
-        auto* view = new StreamSnapshotView (processor, this, streamId);
+        auto* view = new StreamScatterView (processor, this, streamId);
         streamTabs->addTab (label, findColour (ThemeColours::componentParentBackground), view, true);
     }
 }
 
-StreamSnapshotView* DriftMapCanvas::getCurrentView() const
+StreamScatterView* DriftMapCanvas::getCurrentView() const
 {
     if (streamTabs == nullptr)
         return nullptr;
 
-    return dynamic_cast<StreamSnapshotView*> (streamTabs->getCurrentContentComponent());
+    return dynamic_cast<StreamScatterView*> (streamTabs->getCurrentContentComponent());
 }

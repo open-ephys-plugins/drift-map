@@ -23,139 +23,82 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 #ifndef DRIFTMAPCANVAS_H_INCLUDED
 #define DRIFTMAPCANVAS_H_INCLUDED
+#include "DriftMap.h"
 
 #include <VisualizerWindowHeaders.h>
+#include <vector>
 
 class DriftMap;
 class DriftMapCanvas;
-class StreamSnapshotView;
+class StreamScatterView;
 
-/**
-
-    Snapshot options interface
-
-*/
 class OptionsBar : public Component,
                    public ParameterEditorOwner,
                    public Button::Listener
 {
 public:
-    /** Constructor */
     OptionsBar (DriftMapCanvas* canvas, DriftMap* processor);
-
-    /** Destructor */
     ~OptionsBar() {}
-
-    /** Respond to button clicks */
     void buttonClicked (Button* button) override;
-
-    /** Called when the component changes size */
-    void resized();
-
-    /** Renders component background */
-    void paint (Graphics& g);
+    void resized() override;
+    void paint (Graphics& g) override;
 
 private:
-    std::unique_ptr<UtilityButton> saveButton;
-
+    std::unique_ptr<UtilityButton> clearButton;
     DriftMapCanvas* canvas;
+    DriftMap* processor;
 };
-/**
-    Per-stream view that renders a snapshot image.
-*/
-class StreamSnapshotView : public Component,
-                           public ChangeListener
+
+class StreamScatterView : public Component
 {
 public:
-    StreamSnapshotView (DriftMap* processor, DriftMapCanvas* owner, uint16 streamId);
-    ~StreamSnapshotView() override;
-
+    StreamScatterView (DriftMap* processor, DriftMapCanvas* owner, uint16 streamId);
+    ~StreamScatterView() override {}
     void paint (Graphics& g) override;
     void resized() override {}
-
-    void saveImage (File& file);
-    void refreshFromSnapshot();
+    void refreshFromProcessor();
+    void clearHistory();
     uint16 getStreamId() const { return streamId; }
 
-    void changeListenerCallback (ChangeBroadcaster* source) override;
-
 private:
-    void updateImageFromSnapshot();
+    void appendPeaksFromProcessor();
+    void pruneHistory();
 
     DriftMap* processor;
     DriftMapCanvas* owner;
     uint16 streamId;
-    Image image;
+    std::vector<DriftMap::PeakEvent> displayPeaks;
+    int64 latestSample = 0;
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StreamSnapshotView);
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StreamScatterView);
 };
 
-/**
-* 
-	Draws data in real time
-
-*/
 class DriftMapCanvas : public Visualizer
 {
 public:
-    /** Constructor */
     DriftMapCanvas (DriftMap* processor);
-
-    /** Destructor */
     ~DriftMapCanvas() {}
 
-    /** Updates boundaries of sub-components whenever the canvas size changes */
     void resized() override;
-
-    /** Called when the visualizer's tab becomes visible again */
     void refreshState() override {}
-
-    /** Updates settings */
     void updateSettings() override;
-
-    /** Called instead of "repaint()" to avoid re-painting sub-components*/
-    void refresh() override {}
-
-    /** Draws the canvas background */
+    void refresh() override;
     void paint (Graphics& g) override;
-
-    /** Sets the color range */
-    void setRange (int rangeMicrovolts);
-
-    /** Sets the color map */
-    void setColorMap (int colormapIndex);
-
-    /** Saves current image */
-    void saveImage (File& file);
-
-
-    /** Called when a parameter value is updated, to allow plugin-specific responses*/
     void parameterValueChanged (Parameter*) override;
-
-    /** Saves parameters */
     void saveCustomParametersToXml (XmlElement* xml) override;
-
-    /** Loads parameters */
     void loadCustomParametersFromXml (XmlElement* xml) override;
+
+    int getDisplayWindowSeconds() const;
+    void clearAllViews();
 
 private:
     void rebuildTabs();
-    StreamSnapshotView* getCurrentView() const;
-    /** Pointer to the processor class */
-    DriftMap* processor;
+    StreamScatterView* getCurrentView() const;
 
-    /** Options bar*/
+    DriftMap* processor;
     OptionsBar* optionsBar;
     std::unique_ptr<TabbedComponent> streamTabs;
 
-    std::unordered_map<String, float> voltageRanges;
-
-    /** Data range (in microvolts) */
-    float range = 50;
-
-    friend class StreamSnapshotView;
-
-    /** Generates an assertion if this class leaks */
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DriftMapCanvas);
 };
 

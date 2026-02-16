@@ -26,16 +26,23 @@
 #define DRIFTMAP_H_DEFINED
 
 #include <ProcessorHeaders.h>
+#include <limits>
+#include <memory>
 #include <unordered_map>
+#include <vector>
 
 /** 
 	A plugin that includes a canvas for displaying incoming data
 */
 
-class DriftMap : public GenericProcessor,
-                 public ChangeBroadcaster
+class DriftMap : public GenericProcessor
 {
 public:
+    struct PeakEvent
+    {
+        int64 sampleNumber = 0;
+        uint16 channel = 0;
+    };
     /** The class constructor, used to initialize any members.*/
     DriftMap();
 
@@ -54,12 +61,15 @@ public:
     void registerParameters() override;
 
     /** Called when a parameter value is changed*/
-    void parameterValueChanged (Parameter* param);
+    void parameterValueChanged (Parameter* param) override;
 
     /** Defines the functionality of the processor.
 		The process method is called every time a new data buffer is available.
 		Visualizer plugins typically use this method to send data to the canvas for display purposes */
     void process (AudioBuffer<float>& buffer) override;
+
+    bool startAcquisition() override;
+    bool stopAcquisition() override;
 
     /** Handles broadcast messages sent during acquisition
 		Called automatically whenever a broadcast message is sent through the signal chain */
@@ -73,32 +83,42 @@ public:
 		Parameter objects*/
     void loadCustomParametersFromXml (XmlElement* parentElement) override;
 
-    /** Returns a pointer to the snapshot buffer */
-    AudioBuffer<float>* getSnapshot();
-    AudioBuffer<float>* getSnapshot (uint16 streamId);
+    /** Drains pending peak events for a stream into an output buffer. */
+    bool drainPeaks (uint16 streamId, std::vector<PeakEvent>& outPeaks);
 
-    /** Returns true if the snapshot for the given stream is ready */
-    bool isSnapshotReady (uint16 streamId) const;
+    /** Returns stream metadata used by the canvas. */
+    int getNumChannelsForStream (uint16 streamId) const;
+    double getSampleRateForStream (uint16 streamId) const;
+
+    /** Clears pending and historical processor-side peak state. */
+    void clearDriftData();
 
 private:
-    struct StreamSnapshot
+    struct ChannelPeakState
     {
-        AudioBuffer<float> snapshotBuffer;
-        int numSamples = 0;
-        int numChannels = 0;
-        int writePos = 0;
-        bool pendingSnap = false;
-        bool snapshotReady = false;
+        float prev2 = 0.0f;
+        float prev1 = 0.0f;
+        int initCount = 0;
+        int64 prev1SampleNumber = -1;
+        int64 lastPeakSampleNumber = std::numeric_limits<int64>::lowest() / 2;
     };
-    void ensureBufferForStream (StreamSnapshot& snapshot);
-    void writeBlockToSnapshot (StreamSnapshot& snapshot, DataStream* stream, AudioBuffer<float>& buffer, int samplesPerBlock);
-    /**Check whether data stream exists */
-    bool streamExists (uint16 streamId);
-    uint16 currentStream;
-    std::unordered_map<uint16, StreamSnapshot> streamSnapshots;
-    AudioBuffer<float> emptySnapshotBuffer;
 
-    static constexpr int defaultWindowMs = 3000;
+    struct StreamPeaks
+    {
+        int numChannels = 0;
+        double sampleRate = 0.0;
+        std::vector<ChannelPeakState> channelStates;
+        std::vector<PeakEvent> pendingPeaks;
+        std::unique_ptr<CriticalSection> pendingLock;
+    };
+
+    void appendDetectedPeaks (StreamPeaks& streamState, const std::vector<PeakEvent>& detectedPeaks);
+
+    std::unordered_map<uint16, StreamPeaks> streamPeaks;
+
+    static constexpr int defaultThresholdUv = -60;
+    static constexpr int defaultRefractoryMs = 1;
+    static constexpr size_t maxPendingPeaksPerStream = 500000;
 
     /** Generates an assertion if this class leaks */
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DriftMap);

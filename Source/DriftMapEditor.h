@@ -33,9 +33,7 @@
 	Includes buttons for opening the canvas in a tab or window
 */
 
-class DriftMapEditor : public VisualizerEditor,
-                       public Button::Listener,
-                       public ChangeListener
+class DriftMapEditor : public VisualizerEditor
 {
 public:
     /** Constructor */
@@ -47,17 +45,7 @@ public:
     /** Creates the canvas */
     Visualizer* createNewCanvas();
 
-    /** Called when button is pressed*/
-    void buttonClicked (Button* button);
-
-    /** Called when snapshot is ready */
-    void changeListenerCallback (ChangeBroadcaster* source);
-
 private:
-    std::unique_ptr<UtilityButton> takeSnapshotButton;
-    std::unique_ptr<ComboBox> streamSelection;
-
-    uint16 currentStream = 0;
 
     /** Generates an assertion if this class leaks */
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DriftMapEditor);

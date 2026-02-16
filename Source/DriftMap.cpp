@@ -36,6 +36,9 @@ DriftMap::~DriftMap()
 
 void DriftMap::registerParameters()
 {
+    thresholdUvParam.store (defaultThresholdUv, std::memory_order_relaxed);
+    refractoryMsParam.store (defaultRefractoryMs, std::memory_order_relaxed);
+
     addIntParameter (Parameter::PROCESSOR_SCOPE,
                      "threshold_uv",
                      "Threshold (uV)",
@@ -69,6 +72,12 @@ void DriftMap::updateSettings()
         streamState.numChannels = stream->getChannelCount();
         streamState.sampleRate = stream->getSampleRate();
         streamState.channelStates.resize ((size_t) streamState.numChannels);
+        streamState.globalChannelIndices.resize ((size_t) streamState.numChannels);
+
+        const uint16 streamId = stream->getStreamId();
+        for (int localChannel = 0; localChannel < streamState.numChannels; ++localChannel)
+            streamState.globalChannelIndices[(size_t) localChannel] = getGlobalChannelIndex (streamId, localChannel);
+
         streamState.pendingPeaks.reserve (maxPendingPeaksPerStream);
         streamState.pendingLock = std::make_unique<CriticalSection>();
 
@@ -80,18 +89,17 @@ void DriftMap::updateSettings()
 
 void DriftMap::parameterValueChanged (Parameter* parameter)
 {
-    if (parameter->getName().equalsIgnoreCase ("threshold_uv")
-        || parameter->getName().equalsIgnoreCase ("refractory_ms"))
-    {
-        return;
-    }
+    if (parameter->getName().equalsIgnoreCase ("threshold_uv"))
+        thresholdUvParam.store ((int) parameter->getValue(), std::memory_order_relaxed);
+    else if (parameter->getName().equalsIgnoreCase ("refractory_ms"))
+        refractoryMsParam.store ((int) parameter->getValue(), std::memory_order_relaxed);
 }
 
 bool DriftMap::startAcquisition()
 {
-
-    DriftMapEditor* editor = (DriftMapEditor*) getEditor();
-    editor->enable();
+    auto* driftMapEditor = dynamic_cast<DriftMapEditor*> (getEditor());
+    if (driftMapEditor != nullptr)
+        driftMapEditor->enable();
 
     clearDriftData();
     return true;
@@ -99,8 +107,9 @@ bool DriftMap::startAcquisition()
 
 bool DriftMap::stopAcquisition()
 {
-    DriftMapEditor* editor = (DriftMapEditor*) getEditor();
-    editor->disable();
+    auto* driftMapEditor = dynamic_cast<DriftMapEditor*> (getEditor());
+    if (driftMapEditor != nullptr)
+        driftMapEditor->disable();
 
     clearDriftData();
     return true;
@@ -112,7 +121,6 @@ void DriftMap::appendDetectedPeaks (StreamPeaks& streamState, const std::vector<
         return;
 
     const ScopedLock lock (*streamState.pendingLock);
-
 
     const size_t currentSize = streamState.pendingPeaks.size();
     if (currentSize >= maxPendingPeaksPerStream)
@@ -128,8 +136,8 @@ void DriftMap::appendDetectedPeaks (StreamPeaks& streamState, const std::vector<
 
 void DriftMap::process (AudioBuffer<float>& buffer)
 {
-    const float thresholdUv = (float) getParameter ("threshold_uv")->getValue();
-    const int refractoryMs = (int) getParameter ("refractory_ms")->getValue();
+    const float thresholdUv = (float) thresholdUvParam.load (std::memory_order_relaxed);
+    const int refractoryMs = refractoryMsParam.load (std::memory_order_relaxed);
 
     for (auto& entry : streamPeaks)
     {
@@ -144,46 +152,61 @@ void DriftMap::process (AudioBuffer<float>& buffer)
         if (samplesPerBlock <= 0)
             continue;
 
-        if ((int) streamState.channelStates.size() != streamState.numChannels)
+        if ((int) streamState.channelStates.size() != streamState.numChannels
+            || (int) streamState.globalChannelIndices.size() != streamState.numChannels)
+        {
             streamState.channelStates.resize ((size_t) streamState.numChannels);
+            streamState.globalChannelIndices.resize ((size_t) streamState.numChannels);
+            for (int localChannel = 0; localChannel < streamState.numChannels; ++localChannel)
+                streamState.globalChannelIndices[(size_t) localChannel] = getGlobalChannelIndex (streamId, localChannel);
+        }
 
         const int64 blockFirstSample = getFirstSampleNumberForBlock (streamId);
         const int refractorySamples = jmax (0, (int) ((refractoryMs / 1000.0) * streamState.sampleRate));
 
         std::vector<PeakEvent> detectedPeaks;
+        detectedPeaks.reserve ((size_t) jmax (32, (samplesPerBlock * streamState.numChannels) / 256));
 
         for (int localChannel = 0; localChannel < streamState.numChannels; ++localChannel)
         {
             ChannelPeakState& channelState = streamState.channelStates[(size_t) localChannel];
+            const float* channelData = buffer.getReadPointer (streamState.globalChannelIndices[(size_t) localChannel]);
 
-            const int globalChannel = getGlobalChannelIndex (streamId, localChannel);
+            float prev2 = channelState.prev2;
+            float prev1 = channelState.prev1;
+            int64 prev1SampleNumber = channelState.prev1SampleNumber;
+            int64 lastPeakSampleNumber = channelState.lastPeakSampleNumber;
+
+            int64 sampleNumber = blockFirstSample;
 
             for (int sample = 0; sample < samplesPerBlock; ++sample)
             {
-                const int64 sampleNumber = blockFirstSample + sample;
+                const float currentSample = channelData[sample];
 
-                const float currentSample = buffer.getSample (globalChannel, sample);
-
-                const bool localMin = (channelState.prev2 > channelState.prev1)
-                                      && (channelState.prev1 <= currentSample);
-                const bool belowThreshold = channelState.prev1 < thresholdUv;
-                const bool outsideRefractory = (channelState.prev1SampleNumber - channelState.lastPeakSampleNumber) > refractorySamples;
+                const bool localMin = (prev2 > prev1) && (prev1 <= currentSample);
+                const bool belowThreshold = prev1 < thresholdUv;
+                const bool outsideRefractory = (prev1SampleNumber - lastPeakSampleNumber) > refractorySamples;
 
                 if (localMin && belowThreshold && outsideRefractory)
                 {
                     PeakEvent peak;
-                    peak.sampleNumber = channelState.prev1SampleNumber;
+                    peak.sampleNumber = prev1SampleNumber;
                     peak.channel = (uint16) localChannel;
-                    peak.amplitude = -channelState.prev1;
+                    peak.amplitude = -prev1;
                     detectedPeaks.push_back (peak);
-                    channelState.lastPeakSampleNumber = channelState.prev1SampleNumber;
+                    lastPeakSampleNumber = prev1SampleNumber;
                 }
 
-                channelState.prev2 = channelState.prev1;
-                channelState.prev1 = currentSample;
-                channelState.prev1SampleNumber = sampleNumber;
+                prev2 = prev1;
+                prev1 = currentSample;
+                prev1SampleNumber = sampleNumber;
+                ++sampleNumber;
             }
 
+            channelState.prev2 = prev2;
+            channelState.prev1 = prev1;
+            channelState.prev1SampleNumber = prev1SampleNumber;
+            channelState.lastPeakSampleNumber = lastPeakSampleNumber;
         }
 
         appendDetectedPeaks (streamState, detectedPeaks);

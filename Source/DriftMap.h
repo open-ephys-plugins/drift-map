@@ -26,6 +26,7 @@
 #define DRIFTMAP_H_DEFINED
 
 #include <ProcessorHeaders.h>
+#include <atomic>
 #include <limits>
 #include <memory>
 #include <unordered_map>
@@ -108,17 +109,20 @@ private:
         int numChannels = 0;
         double sampleRate = 0.0;
         std::vector<ChannelPeakState> channelStates;
+        std::vector<int> globalChannelIndices;
         std::vector<PeakEvent> pendingPeaks;
         std::unique_ptr<CriticalSection> pendingLock;
     };
 
     void appendDetectedPeaks (StreamPeaks& streamState, const std::vector<PeakEvent>& detectedPeaks);
 
-    std::unordered_map<uint16, StreamPeaks> streamPeaks;
 
     static constexpr int defaultThresholdUv = -60;
     static constexpr int defaultRefractoryMs = 1;
     static constexpr size_t maxPendingPeaksPerStream = 500000;
+    std::unordered_map<uint16, StreamPeaks> streamPeaks;
+    std::atomic<int> thresholdUvParam { defaultThresholdUv };
+    std::atomic<int> refractoryMsParam { defaultRefractoryMs };
 
     /** Generates an assertion if this class leaks */
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DriftMap);

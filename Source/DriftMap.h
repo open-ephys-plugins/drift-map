@@ -42,6 +42,7 @@ public:
     {
         int64 sampleNumber = 0;
         uint16 channel = 0;
+        float amplitude = 0.0f;
     };
     /** The class constructor, used to initialize any members.*/
     DriftMap();
@@ -98,7 +99,6 @@ private:
     {
         float prev2 = 0.0f;
         float prev1 = 0.0f;
-        int initCount = 0;
         int64 prev1SampleNumber = -1;
         int64 lastPeakSampleNumber = std::numeric_limits<int64>::lowest() / 2;
     };

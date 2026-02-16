@@ -58,17 +58,26 @@ public:
     void resized() override {}
     void refreshFromProcessor();
     void clearHistory();
+    void invalidateHeatmap();
     uint16 getStreamId() const { return streamId; }
 
 private:
     void appendPeaksFromProcessor();
-    void pruneHistory();
+    void rebuildHeatmapImage (Rectangle<int> plotBounds, int64 windowSamples, int numChannels);
+    void drawPeakOnImage (const DriftMap::PeakEvent& peak, Rectangle<int> plotBounds, int64 windowSamples, int numChannels);
+    void resetSweepState();
 
     DriftMap* processor;
     DriftMapCanvas* owner;
     uint16 streamId;
-    std::vector<DriftMap::PeakEvent> displayPeaks;
-    int64 latestSample = 0;
+    std::vector<DriftMap::PeakEvent> windowPeaks;
+    int64 latestSample = -1;
+    int64 windowStartSample = -1;
+    Image heatmapImage;
+    bool heatmapDirty = true;
+    int cachedPlotWidth = 0;
+    int cachedPlotHeight = 0;
+    int64 cachedWindowSamples = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StreamScatterView);
 };
@@ -89,6 +98,7 @@ public:
     void loadCustomParametersFromXml (XmlElement* xml) override;
 
     int getDisplayWindowSeconds() const;
+    int getMaxAmplitudeUv() const;
     void clearAllViews();
 
 private:

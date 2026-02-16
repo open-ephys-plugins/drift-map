@@ -23,79 +23,183 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 #include "DriftMapCanvas.h"
 
+#include "ColorMap.h"
 #include "DriftMap.h"
-#include <algorithm>
 
-#include <array>
+#include <algorithm>
 
 StreamScatterView::StreamScatterView (DriftMap* processor_, DriftMapCanvas* owner_, uint16 streamId_)
     : processor (processor_), owner (owner_), streamId (streamId_)
 {
 }
 
-void StreamScatterView::appendPeaksFromProcessor()
+void StreamScatterView::resetSweepState()
 {
-    if (processor == nullptr)
-        return;
-
-    std::vector<DriftMap::PeakEvent> newPeaks;
-    if (! processor->drainPeaks (streamId, newPeaks))
-        return;
-
-    if (newPeaks.empty())
-        return;
-
-    latestSample = jmax (latestSample, newPeaks.back().sampleNumber);
-
-    const size_t oldSize = displayPeaks.size();
-    displayPeaks.resize (oldSize + newPeaks.size());
-    std::copy (newPeaks.begin(),
-               newPeaks.end(),
-               displayPeaks.begin() + (int64) oldSize);
+    windowPeaks.clear();
+    latestSample = -1;
+    windowStartSample = -1;
+    heatmapImage = Image();
+    heatmapDirty = true;
+    cachedWindowSamples = 0;
 }
 
-void StreamScatterView::pruneHistory()
+void StreamScatterView::drawPeakOnImage (const DriftMap::PeakEvent& peak, Rectangle<int> plotBounds, int64 windowSamples, int numChannels)
 {
-    if (processor == nullptr || displayPeaks.empty())
+    if (! heatmapImage.isValid() || windowSamples <= 0)
         return;
 
+    const int64 dx = peak.sampleNumber - windowStartSample;
+    if (dx < 0 || dx >= windowSamples)
+        return;
+
+    const int x = (int) ((dx * (plotBounds.getWidth() - 1)) / windowSamples);
+    if (x < 0 || x >= plotBounds.getWidth())
+        return;
+
+    int yPixel = plotBounds.getBottom() - 1;
+    if (numChannels > 1)
+    {
+        const double yNorm = (double) peak.channel / (double) (numChannels - 1);
+        yPixel = plotBounds.getBottom() - 1 - (int) (yNorm * (plotBounds.getHeight() - 1));
+    }
+
+    const int relativeY = yPixel - plotBounds.getY();
+    if (relativeY < 0 || relativeY >= plotBounds.getHeight())
+        return;
+
+    const float maxAmpUv = (float) owner->getMaxAmplitudeUv();
+    const float normalized = jlimit (0.0f, 1.0f, jmax (0.0f, peak.amplitude) / jmax (1.0f, maxAmpUv));
+    const Colour pointColour = ColorMap::getColorForNormalizedValue (normalized).withAlpha (0.92f);
+
+    Graphics imageGraphics (heatmapImage);
+    imageGraphics.setColour (pointColour);
+
+    constexpr float circleDiameter = 3.5f;
+    constexpr float radius = circleDiameter * 0.5f;
+    imageGraphics.fillEllipse ((float) x - radius,
+                               (float) relativeY - radius,
+                               circleDiameter,
+                               circleDiameter);
+}
+
+void StreamScatterView::rebuildHeatmapImage (Rectangle<int> plotBounds, int64 windowSamples, int numChannels)
+{
+    if (plotBounds.getWidth() <= 1 || plotBounds.getHeight() <= 1)
+        return;
+
+    heatmapImage = Image (Image::ARGB,
+                          plotBounds.getWidth(),
+                          plotBounds.getHeight(),
+                          true,
+                          SoftwareImageType());
+    Graphics imageGraphics (heatmapImage);
+    imageGraphics.fillAll (Colours::transparentBlack);
+
+    for (const auto& peak : windowPeaks)
+        drawPeakOnImage (peak, plotBounds, windowSamples, numChannels);
+
+    heatmapDirty = false;
+    cachedPlotWidth = plotBounds.getWidth();
+    cachedPlotHeight = plotBounds.getHeight();
+    cachedWindowSamples = windowSamples;
+}
+
+void StreamScatterView::appendPeaksFromProcessor()
+{
+    if (processor == nullptr || owner == nullptr)
+        return;
+
+    const int numChannels = processor->getNumChannelsForStream (streamId);
     const double sampleRate = processor->getSampleRateForStream (streamId);
-    if (sampleRate <= 0.0)
+    if (numChannels <= 0 || sampleRate <= 0.0)
         return;
 
     const int64 windowSamples = (int64) (sampleRate * owner->getDisplayWindowSeconds());
     if (windowSamples <= 0)
         return;
 
-    const int64 keepAfter = jmax ((int64) 0, latestSample - (windowSamples * 2));
+    std::vector<DriftMap::PeakEvent> newPeaks;
+    if (! processor->drainPeaks (streamId, newPeaks) || newPeaks.empty())
+        return;
 
-    auto it = std::lower_bound (displayPeaks.begin(),
-                                displayPeaks.end(),
-                                keepAfter,
-                                [] (const DriftMap::PeakEvent& peak, int64 sample) { return peak.sampleNumber < sample; });
+    std::sort (newPeaks.begin(),
+               newPeaks.end(),
+               [] (const DriftMap::PeakEvent& a, const DriftMap::PeakEvent& b) { return a.sampleNumber < b.sampleNumber; });
 
-    if (it != displayPeaks.begin())
-        displayPeaks.erase (displayPeaks.begin(), it);
+    latestSample = jmax (latestSample, newPeaks.back().sampleNumber);
 
-    constexpr size_t maxDisplayPeaks = 1000000;
-    if (displayPeaks.size() > maxDisplayPeaks)
+    Rectangle<int> plotBounds = getLocalBounds().reduced (16);
+    const bool needResetForGeometry = ! heatmapImage.isValid()
+                                      || plotBounds.getWidth() != cachedPlotWidth
+                                      || plotBounds.getHeight() != cachedPlotHeight
+                                      || windowSamples != cachedWindowSamples;
+
+    if (needResetForGeometry)
     {
-        const size_t removeCount = displayPeaks.size() - maxDisplayPeaks;
-        displayPeaks.erase (displayPeaks.begin(), displayPeaks.begin() + (int64) removeCount);
+        heatmapImage = Image (Image::ARGB,
+                              jmax (2, plotBounds.getWidth()),
+                              jmax (2, plotBounds.getHeight()),
+                              true,
+                              SoftwareImageType());
+        Graphics imageGraphics (heatmapImage);
+        imageGraphics.fillAll (Colours::transparentBlack);
+        cachedPlotWidth = plotBounds.getWidth();
+        cachedPlotHeight = plotBounds.getHeight();
+        cachedWindowSamples = windowSamples;
+        heatmapDirty = false;
+    }
+
+    if (windowStartSample < 0)
+    {
+        const int64 firstSample = newPeaks.front().sampleNumber;
+        windowStartSample = (firstSample / windowSamples) * windowSamples;
+    }
+
+    for (const auto& peak : newPeaks)
+    {
+        while (peak.sampleNumber >= windowStartSample + windowSamples)
+        {
+            windowStartSample += windowSamples;
+            windowPeaks.clear();
+
+            if (heatmapImage.isValid())
+            {
+                Graphics imageGraphics (heatmapImage);
+                imageGraphics.fillAll (Colours::transparentBlack);
+            }
+        }
+
+        if (peak.sampleNumber < windowStartSample)
+            continue;
+
+        windowPeaks.push_back (peak);
+        drawPeakOnImage (peak, plotBounds, windowSamples, numChannels);
+    }
+
+    constexpr size_t maxWindowPeaks = 300000;
+    if (windowPeaks.size() > maxWindowPeaks)
+    {
+        const size_t removeCount = windowPeaks.size() - maxWindowPeaks;
+        windowPeaks.erase (windowPeaks.begin(), windowPeaks.begin() + (int64) removeCount);
+        heatmapDirty = true;
     }
 }
 
 void StreamScatterView::refreshFromProcessor()
 {
     appendPeaksFromProcessor();
-    pruneHistory();
     repaint();
 }
 
 void StreamScatterView::clearHistory()
 {
-    displayPeaks.clear();
-    latestSample = 0;
+    resetSweepState();
+    repaint();
+}
+
+void StreamScatterView::invalidateHeatmap()
+{
+    heatmapDirty = true;
     repaint();
 }
 
@@ -107,82 +211,28 @@ void StreamScatterView::paint (Graphics& g)
     g.setColour (Colours::darkgrey);
     g.drawRect (plotBounds);
 
-    if (processor == nullptr)
+    if (processor == nullptr || owner == nullptr || plotBounds.getWidth() <= 1 || plotBounds.getHeight() <= 1)
         return;
 
-    const int numChannels = processor->getNumChannelsForStream (streamId);
     const double sampleRate = processor->getSampleRateForStream (streamId);
-
-    if (numChannels <= 0 || sampleRate <= 0.0 || displayPeaks.empty() || plotBounds.getWidth() < 2 || plotBounds.getHeight() < 2)
+    const int numChannels = processor->getNumChannelsForStream (streamId);
+    const int64 windowSamples = (int64) (sampleRate * owner->getDisplayWindowSeconds());
+    if (sampleRate <= 0.0 || numChannels <= 0 || windowSamples <= 0)
         return;
 
-    const int windowSeconds = owner->getDisplayWindowSeconds();
-    const int64 windowSamples = (int64) (windowSeconds * sampleRate);
-    if (windowSamples <= 0)
-        return;
-
-    const int64 xMax = jmax ((int64) 1, latestSample);
-    const int64 xMin = jmax ((int64) 0, xMax - windowSamples);
-    const int64 xSpan = jmax ((int64) 1, xMax - xMin);
-
-    auto startIt = std::lower_bound (displayPeaks.begin(),
-                                     displayPeaks.end(),
-                                     xMin,
-                                     [] (const DriftMap::PeakEvent& peak, int64 sample) { return peak.sampleNumber < sample; });
-
-    struct ColumnPoints
+    if (! heatmapImage.isValid()
+        || plotBounds.getWidth() != cachedPlotWidth
+        || plotBounds.getHeight() != cachedPlotHeight
+        || windowSamples != cachedWindowSamples)
     {
-        std::array<int, 4> y {};
-        int count = 0;
-    };
-
-    std::vector<ColumnPoints> columns ((size_t) plotBounds.getWidth());
-
-    for (auto it = startIt; it != displayPeaks.end(); ++it)
-    {
-        const DriftMap::PeakEvent& peak = *it;
-        if (peak.sampleNumber > xMax)
-            break;
-
-        const int x = (int) (((peak.sampleNumber - xMin) * (plotBounds.getWidth() - 1)) / xSpan);
-        if (x < 0 || x >= plotBounds.getWidth())
-            continue;
-
-        int yPixel = plotBounds.getBottom() - 1;
-        if (numChannels > 1)
-        {
-            const double yNorm = (double) peak.channel / (double) (numChannels - 1);
-            yPixel = plotBounds.getBottom() - 1 - (int) (yNorm * (plotBounds.getHeight() - 1));
-        }
-
-        ColumnPoints& column = columns[(size_t) x];
-
-        bool alreadyPresent = false;
-        for (int i = 0; i < column.count; ++i)
-        {
-            if (column.y[(size_t) i] == yPixel)
-            {
-                alreadyPresent = true;
-                break;
-            }
-        }
-
-        if (alreadyPresent)
-            continue;
-
-        if (column.count < (int) column.y.size())
-        {
-            column.y[(size_t) column.count++] = yPixel;
-        }
+        heatmapDirty = true;
     }
 
-    g.setColour (Colours::white.withAlpha (0.85f));
-    for (int x = 0; x < (int) columns.size(); ++x)
-    {
-        const ColumnPoints& column = columns[(size_t) x];
-        for (int i = 0; i < column.count; ++i)
-            g.fillRect (plotBounds.getX() + x, column.y[(size_t) i], 1, 1);
-    }
+    if (heatmapDirty)
+        rebuildHeatmapImage (plotBounds, windowSamples, numChannels);
+
+    if (heatmapImage.isValid())
+        g.drawImageAt (heatmapImage, plotBounds.getX(), plotBounds.getY(), false);
 }
 
 OptionsBar::OptionsBar (DriftMapCanvas* canvas_, DriftMap* processor_)
@@ -207,6 +257,14 @@ OptionsBar::OptionsBar (DriftMapCanvas* canvas_, DriftMap* processor_)
     auto* windowEditor = new ComboBoxParameterEditor (canvas->getParameter ("display_window_s"), 25, 200);
     windowEditor->setLayout (ParameterEditor::Layout::nameOnLeft);
     addParameterEditor (windowEditor, 470, 12);
+
+    auto* maxAmpEditor = new ComboBoxParameterEditor (canvas->getParameter ("max_amplitude_uv"), 25, 180);
+    maxAmpEditor->setLayout (ParameterEditor::Layout::nameOnLeft);
+    addParameterEditor (maxAmpEditor, 640, 12);
+
+    auto* colorMapEditor = new ComboBoxParameterEditor (canvas->getParameter ("color_map"), 25, 170);
+    colorMapEditor->setLayout (ParameterEditor::Layout::nameOnLeft);
+    addParameterEditor (colorMapEditor, 810, 12);
 }
 
 void OptionsBar::buttonClicked (Button* button)
@@ -243,11 +301,40 @@ DriftMapCanvas::DriftMapCanvas (DriftMap* processor_)
     windows.add ("60");
     windows.add ("300");
 
+    Array<String> colorMaps;
+    colorMaps.add ("Greys");
+    colorMaps.add ("Cividis");
+    colorMaps.add ("Viridis");
+    colorMaps.add ("RdGy");
+    colorMaps.add ("RdBu");
+
+    Array<String> maxAmplitudes;
+    maxAmplitudes.add ("50");
+    maxAmplitudes.add ("100");
+    maxAmplitudes.add ("250");
+    maxAmplitudes.add ("500");
+    maxAmplitudes.add ("1000");
+    maxAmplitudes.add ("2000");
+
     addCategoricalParameter ("display_window_s",
                              "Display Window (s)",
                              "Visible time range in seconds",
                              windows,
                              2);
+
+    addCategoricalParameter ("color_map",
+                             "Color Map",
+                             "Color map for drift heatmap amplitudes",
+                             colorMaps,
+                             1);
+
+    addCategoricalParameter ("max_amplitude_uv",
+                             "Max Amplitude (uV)",
+                             "Fixed amplitude scale for heatmap coloring",
+                             maxAmplitudes,
+                             2);
+
+    ColorMap::setColorMap (ColorMapId::CIVIDIS);
 
     optionsBar = new OptionsBar (this, processor);
     addParameterEditorOwner (optionsBar);
@@ -279,13 +366,27 @@ void DriftMapCanvas::refresh()
 
 void DriftMapCanvas::parameterValueChanged (Parameter* param)
 {
-    if (param->getName().equalsIgnoreCase ("display_window_s"))
+    if (param->getName().equalsIgnoreCase ("color_map"))
+    {
+        const int colorMapIndex = (int) param->getValue() + 1;
+        ColorMap::setColorMap ((ColorMapId) colorMapIndex);
+    }
+
+    if (param->getName().equalsIgnoreCase ("display_window_s")
+        || param->getName().equalsIgnoreCase ("color_map")
+        || param->getName().equalsIgnoreCase ("max_amplitude_uv"))
     {
         for (int i = 0; i < streamTabs->getNumTabs(); ++i)
         {
             auto* view = dynamic_cast<StreamScatterView*> (streamTabs->getTabContentComponent (i));
             if (view != nullptr)
-                view->repaint();
+            {
+                if (param->getName().equalsIgnoreCase ("display_window_s"))
+                    view->clearHistory();
+                else
+                    view->invalidateHeatmap();
+                view->refreshFromProcessor();
+            }
         }
     }
 }
@@ -311,6 +412,16 @@ int DriftMapCanvas::getDisplayWindowSeconds() const
 
     const int windowSeconds = windowParam->getValueAsString().getIntValue();
     return windowSeconds > 0 ? windowSeconds : 60;
+}
+
+int DriftMapCanvas::getMaxAmplitudeUv() const
+{
+    auto* maxAmpParam = getParameter ("max_amplitude_uv");
+    if (maxAmpParam == nullptr)
+        return 250;
+
+    const int maxAmpUv = maxAmpParam->getValueAsString().getIntValue();
+    return maxAmpUv > 0 ? maxAmpUv : 250;
 }
 
 void DriftMapCanvas::clearAllViews()

@@ -151,42 +151,39 @@ void DriftMap::process (AudioBuffer<float>& buffer)
         const int refractorySamples = jmax (0, (int) ((refractoryMs / 1000.0) * streamState.sampleRate));
 
         std::vector<PeakEvent> detectedPeaks;
-        detectedPeaks.reserve ((size_t) (samplesPerBlock * jmax (1, streamState.numChannels / 32)));
 
-        for (int sample = 0; sample < samplesPerBlock; ++sample)
+        for (int localChannel = 0; localChannel < streamState.numChannels; ++localChannel)
         {
-            const int64 sampleNumber = blockFirstSample + sample;
+            ChannelPeakState& channelState = streamState.channelStates[(size_t) localChannel];
 
-            for (int localChannel = 0; localChannel < streamState.numChannels; ++localChannel)
+            const int globalChannel = getGlobalChannelIndex (streamId, localChannel);
+
+            for (int sample = 0; sample < samplesPerBlock; ++sample)
             {
-                ChannelPeakState& channelState = streamState.channelStates[(size_t) localChannel];
+                const int64 sampleNumber = blockFirstSample + sample;
 
-                const int globalChannel = getGlobalChannelIndex (streamId, localChannel);
                 const float currentSample = buffer.getSample (globalChannel, sample);
 
-                if (channelState.initCount >= 2)
-                {
-                    const bool localMin = (channelState.prev2 > channelState.prev1)
-                                          && (channelState.prev1 <= currentSample);
-                    const bool belowThreshold = channelState.prev1 < thresholdUv;
-                    const bool outsideRefractory = (channelState.prev1SampleNumber - channelState.lastPeakSampleNumber) > refractorySamples;
+                const bool localMin = (channelState.prev2 > channelState.prev1)
+                                      && (channelState.prev1 <= currentSample);
+                const bool belowThreshold = channelState.prev1 < thresholdUv;
+                const bool outsideRefractory = (channelState.prev1SampleNumber - channelState.lastPeakSampleNumber) > refractorySamples;
 
-                    if (localMin && belowThreshold && outsideRefractory)
-                    {
-                        PeakEvent peak;
-                        peak.sampleNumber = channelState.prev1SampleNumber;
-                        peak.channel = (uint16) localChannel;
-                        detectedPeaks.push_back (peak);
-                        channelState.lastPeakSampleNumber = channelState.prev1SampleNumber;
-                    }
+                if (localMin && belowThreshold && outsideRefractory)
+                {
+                    PeakEvent peak;
+                    peak.sampleNumber = channelState.prev1SampleNumber;
+                    peak.channel = (uint16) localChannel;
+                    peak.amplitude = -channelState.prev1;
+                    detectedPeaks.push_back (peak);
+                    channelState.lastPeakSampleNumber = channelState.prev1SampleNumber;
                 }
 
                 channelState.prev2 = channelState.prev1;
                 channelState.prev1 = currentSample;
                 channelState.prev1SampleNumber = sampleNumber;
-                if (channelState.initCount < 2)
-                    channelState.initCount++;
             }
+
         }
 
         appendDetectedPeaks (streamState, detectedPeaks);
@@ -242,7 +239,6 @@ void DriftMap::clearDriftData()
 
         for (auto& channelState : streamState.channelStates)
         {
-            channelState.initCount = 0;
             channelState.prev2 = 0.0f;
             channelState.prev1 = 0.0f;
             channelState.prev1SampleNumber = -1;

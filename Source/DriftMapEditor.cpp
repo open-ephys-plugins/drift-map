@@ -2,7 +2,7 @@
 ------------------------------------------------------------------
 
 This file is part of a plugin for the Open Ephys GUI
-Copyright (C) 2022 Open Ephys
+Copyright (C) 2026 Open Ephys
 
 ------------------------------------------------------------------
 

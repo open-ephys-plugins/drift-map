@@ -2,7 +2,7 @@
 ------------------------------------------------------------------
 
 This file is part of a plugin for the Open Ephys GUI
-Copyright (C) 2022 Open Ephys
+Copyright (C) 2026 Open Ephys
 
 ------------------------------------------------------------------
 
@@ -37,10 +37,19 @@ class OptionsBar : public Component,
                    public Button::Listener
 {
 public:
+    /** Creates the shared options bar for the drift-map canvas. */
     OptionsBar (DriftMapCanvas* canvas, DriftMap* processor);
+
+    /** Destroys the options bar. */
     ~OptionsBar() {}
+
+    /** Handles button clicks from controls in the options bar. */
     void buttonClicked (Button* button) override;
+
+    /** Lays out child controls when the component is resized. */
     void resized() override;
+
+    /** Paints the options bar background. */
     void paint (Graphics& g) override;
 
 private:
@@ -52,28 +61,68 @@ private:
 class StreamScatterView : public Component
 {
 public:
+    /** Creates a per-stream scatter view backed by a session image. */
     StreamScatterView (DriftMap* processor, DriftMapCanvas* owner, uint16 streamId);
+
+    /** Destroys the stream scatter view. */
     ~StreamScatterView() override {}
+
+    /** Paints the current stream image and timeline overlays. */
     void paint (Graphics& g) override;
+
+    /** Handles resize events for the view. */
     void resized() override {}
+
+    /** Starts panning when the user presses in the plot region. */
     void mouseDown (const MouseEvent& event) override;
+
+    /** Updates pan offset while the user drags. */
     void mouseDrag (const MouseEvent& event) override;
+
+    /** Ends panning interaction. */
     void mouseUp (const MouseEvent& event) override;
+
+    /** Adjusts zoom around the mouse anchor point. */
     void mouseWheelMove (const MouseEvent& event, const MouseWheelDetails& wheel) override;
+
+    /** Resets the viewport to follow the latest data. */
     void mouseDoubleClick (const MouseEvent& event) override;
+
+    /** Pulls newly detected peaks from the processor and repaints. */
     void refreshFromProcessor();
+
+    /** Clears the accumulated session image and view state. */
     void clearHistory();
+
+    /** Enables or disables light-mode rendering. */
     void setLightMode (bool enabled);
+
+    /** Updates the timebase used for visible-window scaling. */
     void setTimebaseSeconds (double timebaseSeconds);
+
+    /** Returns the stream id rendered by this view. */
     uint16 getStreamId() const { return streamId; }
 
 private:
+    /** Drains available peaks from the processor into the session image. */
     void appendPeaksFromProcessor();
+
+    /** Allocates the backing session image if needed. */
     void ensureSessionImage (Rectangle<int> plotBounds);
+
+    /** Draws one detected peak into the backing session image. */
     void drawPeakOnSessionImage (const DriftMap::PeakEvent& peak, int numChannels);
+
+    /** Grows the session image width to include a required x-coordinate. */
     void extendSessionImageWidth (int requiredX);
+
+    /** Positions the viewport to the newest visible data. */
     void resetViewToLatest();
+
+    /** Rebuilds cached inverted imagery when theme data is stale. */
     void updateThemeCacheIfNeeded();
+
+    /** Resets temporal mapping and pan/zoom state. */
     void resetSweepState();
 
     DriftMap* processor;
@@ -101,25 +150,53 @@ private:
 class DriftMapCanvas : public Visualizer
 {
 public:
+    /** Creates the drift-map visualizer canvas. */
     DriftMapCanvas (DriftMap* processor);
+
+    /** Destroys the drift-map canvas. */
     ~DriftMapCanvas() {}
+    /** Lays out tabs and the bottom options viewport. */
 
     void resized() override;
+
+    /** Refreshes transient visualizer state. */
     void refreshState() override {}
+
+    /** Rebuilds UI tabs to match current stream configuration. */
     void updateSettings() override;
+
+    /** Refreshes the currently selected stream view. */
     void refresh() override;
+
+    /** Paints the canvas background. */
     void paint (Graphics& g) override;
+
+    /** Updates tab/theme visuals after LookAndFeel changes. */
     void lookAndFeelChanged() override;
+
+    /** Reacts to canvas parameter changes. */
     void parameterValueChanged (Parameter*) override;
+
+    /** Saves canvas-specific parameters to XML. */
     void saveCustomParametersToXml (XmlElement* xml) override;
+
+    /** Restores canvas-specific parameters from XML. */
     void loadCustomParametersFromXml (XmlElement* xml) override;
+    /** Returns the selected display window duration in seconds. */
 
     int getDisplayWindowSeconds() const;
+
+    /** Clears history for all stream views. */
     void clearAllViews();
 
 private:
+    /** Recreates stream tabs for the currently available streams. */
     void rebuildTabs();
+
+    /** Applies current tab colours to all tab buttons. */
     void refreshTabColours();
+
+    /** Returns the currently selected stream view, if any. */
     StreamScatterView* getCurrentView() const;
 
     DriftMap* processor;

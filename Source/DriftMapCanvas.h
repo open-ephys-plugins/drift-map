@@ -56,28 +56,44 @@ public:
     ~StreamScatterView() override {}
     void paint (Graphics& g) override;
     void resized() override {}
+    void mouseDown (const MouseEvent& event) override;
+    void mouseDrag (const MouseEvent& event) override;
+    void mouseUp (const MouseEvent& event) override;
+    void mouseWheelMove (const MouseEvent& event, const MouseWheelDetails& wheel) override;
+    void mouseDoubleClick (const MouseEvent& event) override;
     void refreshFromProcessor();
     void clearHistory();
-    void invalidateHeatmap();
+    void setLightMode (bool enabled);
+    void setTimebaseSeconds (double timebaseSeconds);
     uint16 getStreamId() const { return streamId; }
 
 private:
     void appendPeaksFromProcessor();
-    void rebuildHeatmapImage (Rectangle<int> plotBounds, int64 windowSamples, int numChannels);
-    void drawPeakOnImage (const DriftMap::PeakEvent& peak, Rectangle<int> plotBounds, int64 windowSamples, int numChannels);
+    void ensureSessionImage (Rectangle<int> plotBounds);
+    void drawPeakOnSessionImage (const DriftMap::PeakEvent& peak, int numChannels);
+    void extendSessionImageWidth (int requiredX);
+    void resetViewToLatest();
+    void updateThemeCacheIfNeeded();
     void resetSweepState();
 
     DriftMap* processor;
     DriftMapCanvas* owner;
     uint16 streamId;
-    std::vector<DriftMap::PeakEvent> windowPeaks;
-    int64 latestSample = -1;
-    int64 windowStartSample = -1;
-    Image heatmapImage;
-    bool heatmapDirty = true;
+    Image sessionImage;
+    Image invertedSessionImage;
+    bool invertedDirty = true;
+    bool lightModeEnabled = false;
+    double sessionStartTimeSeconds = -1.0;
+    double secondsPerPixel = 0.0;
+    int latestDrawnX = -1;
+    double viewStartX = 0.0;
+    double viewZoom = 1.0;
+    bool followLatest = true;
+    bool isPanning = false;
+    int lastDragX = 0;
     int cachedPlotWidth = 0;
     int cachedPlotHeight = 0;
-    int64 cachedWindowSamples = 0;
+    Colour clearColour = Colour(40, 40, 40);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StreamScatterView);
 };
@@ -93,20 +109,22 @@ public:
     void updateSettings() override;
     void refresh() override;
     void paint (Graphics& g) override;
+    void lookAndFeelChanged() override;
     void parameterValueChanged (Parameter*) override;
     void saveCustomParametersToXml (XmlElement* xml) override;
     void loadCustomParametersFromXml (XmlElement* xml) override;
 
     int getDisplayWindowSeconds() const;
-    int getMaxAmplitudeUv() const;
     void clearAllViews();
 
 private:
     void rebuildTabs();
+    void refreshTabColours();
     StreamScatterView* getCurrentView() const;
 
     DriftMap* processor;
-    OptionsBar* optionsBar;
+    std::unique_ptr<OptionsBar> optionsBar;
+    std::unique_ptr<Viewport> optionsViewport;
     std::unique_ptr<TabbedComponent> streamTabs;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DriftMapCanvas);

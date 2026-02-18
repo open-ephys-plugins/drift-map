@@ -39,21 +39,25 @@ void DriftMap::registerParameters()
     thresholdUvParam.store (defaultThresholdUv, std::memory_order_relaxed);
     refractoryMsParam.store (defaultRefractoryMs, std::memory_order_relaxed);
 
-    addIntParameter (Parameter::PROCESSOR_SCOPE,
-                     "threshold_uv",
-                     "Threshold (uV)",
-                     "Negative peak threshold in microvolts",
-                     defaultThresholdUv,
-                     -500,
-                     -5);
+    addFloatParameter (Parameter::PROCESSOR_SCOPE,
+                       "threshold_uv",
+                       "Threshold (uV)",
+                       "Negative peak threshold in microvolts",
+                       "uV",
+                       defaultThresholdUv,
+                       -500,
+                       -50,
+                        1.0);
 
-    addIntParameter (Parameter::PROCESSOR_SCOPE,
+    addFloatParameter (Parameter::PROCESSOR_SCOPE,
                      "refractory_ms",
                      "Refractory (ms)",
                      "Minimum separation between peaks on a channel",
+                       "ms",
                      defaultRefractoryMs,
-                     0,
-                     20);
+                     0.5,
+                     20,
+                     0.5);
 }
 
 AudioProcessorEditor* DriftMap::createEditor()
@@ -64,6 +68,7 @@ AudioProcessorEditor* DriftMap::createEditor()
 
 void DriftMap::updateSettings()
 {
+    auto previousStates = std::move (streamPeaks);
     std::unordered_map<uint16, StreamPeaks> updatedStates;
 
     for (auto stream : getDataStreams())
@@ -81,7 +86,23 @@ void DriftMap::updateSettings()
         streamState.pendingPeaks.reserve (maxPendingPeaksPerStream);
         streamState.pendingLock = std::make_unique<CriticalSection>();
 
-        updatedStates[stream->getStreamId()] = std::move (streamState);
+        auto previousStateIt = previousStates.find (streamId);
+        if (previousStateIt != previousStates.end())
+        {
+            StreamPeaks& previousState = previousStateIt->second;
+            streamState.lastCumulativeBlockEndSample = previousState.lastCumulativeBlockEndSample;
+
+            if (previousState.pendingLock != nullptr)
+            {
+                const ScopedLock lock (*previousState.pendingLock);
+                streamState.pendingPeaks = std::move (previousState.pendingPeaks);
+            }
+        }
+
+        if (streamState.pendingPeaks.capacity() < maxPendingPeaksPerStream)
+            streamState.pendingPeaks.reserve (maxPendingPeaksPerStream);
+
+        updatedStates[streamId] = std::move (streamState);
     }
 
     streamPeaks = std::move (updatedStates);
@@ -90,9 +111,9 @@ void DriftMap::updateSettings()
 void DriftMap::parameterValueChanged (Parameter* parameter)
 {
     if (parameter->getName().equalsIgnoreCase ("threshold_uv"))
-        thresholdUvParam.store ((int) parameter->getValue(), std::memory_order_relaxed);
+        thresholdUvParam.store ((float) parameter->getValue(), std::memory_order_relaxed);
     else if (parameter->getName().equalsIgnoreCase ("refractory_ms"))
-        refractoryMsParam.store ((int) parameter->getValue(), std::memory_order_relaxed);
+        refractoryMsParam.store ((float) parameter->getValue(), std::memory_order_relaxed);
 }
 
 bool DriftMap::startAcquisition()
@@ -100,8 +121,7 @@ bool DriftMap::startAcquisition()
     auto* driftMapEditor = dynamic_cast<DriftMapEditor*> (getEditor());
     if (driftMapEditor != nullptr)
         driftMapEditor->enable();
-
-    clearDriftData();
+    resetChannelDetectionHistory();
     return true;
 }
 
@@ -110,8 +130,6 @@ bool DriftMap::stopAcquisition()
     auto* driftMapEditor = dynamic_cast<DriftMapEditor*> (getEditor());
     if (driftMapEditor != nullptr)
         driftMapEditor->disable();
-
-    clearDriftData();
     return true;
 }
 
@@ -136,6 +154,8 @@ void DriftMap::appendDetectedPeaks (StreamPeaks& streamState, const std::vector<
 
 void DriftMap::process (AudioBuffer<float>& buffer)
 {
+    constexpr int sampleStride = 2;
+    constexpr int maxPeaksPerChannelPerBuffer = 10;
     const float thresholdUv = (float) thresholdUvParam.load (std::memory_order_relaxed);
     const int refractoryMs = refractoryMsParam.load (std::memory_order_relaxed);
 
@@ -161,7 +181,6 @@ void DriftMap::process (AudioBuffer<float>& buffer)
                 streamState.globalChannelIndices[(size_t) localChannel] = getGlobalChannelIndex (streamId, localChannel);
         }
 
-        const int64 blockFirstSample = getFirstSampleNumberForBlock (streamId);
         const int refractorySamples = jmax (0, (int) ((refractoryMs / 1000.0) * streamState.sampleRate));
 
         std::vector<PeakEvent> detectedPeaks;
@@ -176,31 +195,31 @@ void DriftMap::process (AudioBuffer<float>& buffer)
             float prev1 = channelState.prev1;
             int64 prev1SampleNumber = channelState.prev1SampleNumber;
             int64 lastPeakSampleNumber = channelState.lastPeakSampleNumber;
+            int peaksAddedForChannel = 0;
 
-            int64 sampleNumber = blockFirstSample;
-
-            for (int sample = 0; sample < samplesPerBlock; ++sample)
+            for (int sample = 0; sample < samplesPerBlock; sample += sampleStride)
             {
                 const float currentSample = channelData[sample];
 
                 const bool localMin = (prev2 > prev1) && (prev1 <= currentSample);
                 const bool belowThreshold = prev1 < thresholdUv;
                 const bool outsideRefractory = (prev1SampleNumber - lastPeakSampleNumber) > refractorySamples;
+                const bool belowPerBufferLimit = peaksAddedForChannel < maxPeaksPerChannelPerBuffer;
 
-                if (localMin && belowThreshold && outsideRefractory)
+                if (localMin && belowThreshold && outsideRefractory && belowPerBufferLimit)
                 {
                     PeakEvent peak;
-                    peak.sampleNumber = prev1SampleNumber;
+                    peak.timestamp = double (prev1SampleNumber) / streamState.sampleRate;
                     peak.channel = (uint16) localChannel;
                     peak.amplitude = -prev1;
                     detectedPeaks.push_back (peak);
+                    ++peaksAddedForChannel;
                     lastPeakSampleNumber = prev1SampleNumber;
                 }
 
                 prev2 = prev1;
                 prev1 = currentSample;
-                prev1SampleNumber = sampleNumber;
-                ++sampleNumber;
+                prev1SampleNumber = streamState.lastCumulativeBlockEndSample + sample;
             }
 
             channelState.prev2 = prev2;
@@ -209,7 +228,23 @@ void DriftMap::process (AudioBuffer<float>& buffer)
             channelState.lastPeakSampleNumber = lastPeakSampleNumber;
         }
 
+        streamState.lastCumulativeBlockEndSample += samplesPerBlock;
         appendDetectedPeaks (streamState, detectedPeaks);
+    }
+}
+
+void DriftMap::resetChannelDetectionHistory()
+{
+    for (auto& entry : streamPeaks)
+    {
+        StreamPeaks& streamState = entry.second;
+        for (auto& channelState : streamState.channelStates)
+        {
+            channelState.prev2 = 0.0f;
+            channelState.prev1 = 0.0f;
+            channelState.prev1SampleNumber = -1;
+            channelState.lastPeakSampleNumber = std::numeric_limits<int64>::lowest() / 2;
+        }
     }
 }
 
@@ -267,6 +302,8 @@ void DriftMap::clearDriftData()
             channelState.prev1SampleNumber = -1;
             channelState.lastPeakSampleNumber = std::numeric_limits<int64>::lowest() / 2;
         }
+
+        streamState.lastCumulativeBlockEndSample = -1;
     }
 }
 

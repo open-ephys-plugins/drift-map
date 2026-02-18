@@ -41,7 +41,7 @@ class DriftMap : public GenericProcessor
 public:
     struct PeakEvent
     {
-        int64 sampleNumber = 0;
+        double timestamp = 0.0f;
         uint16 channel = 0;
         float amplitude = 0.0f;
     };
@@ -112,17 +112,19 @@ private:
         std::vector<int> globalChannelIndices;
         std::vector<PeakEvent> pendingPeaks;
         std::unique_ptr<CriticalSection> pendingLock;
+        int64 lastCumulativeBlockEndSample = 0;
     };
 
     void appendDetectedPeaks (StreamPeaks& streamState, const std::vector<PeakEvent>& detectedPeaks);
+    void resetChannelDetectionHistory();
 
 
-    static constexpr int defaultThresholdUv = -60;
-    static constexpr int defaultRefractoryMs = 1;
+    static constexpr float defaultThresholdUv = -50;
+    static constexpr float defaultRefractoryMs = 2;
     static constexpr size_t maxPendingPeaksPerStream = 500000;
     std::unordered_map<uint16, StreamPeaks> streamPeaks;
-    std::atomic<int> thresholdUvParam { defaultThresholdUv };
-    std::atomic<int> refractoryMsParam { defaultRefractoryMs };
+    std::atomic<float> thresholdUvParam { defaultThresholdUv };
+    std::atomic<float> refractoryMsParam { defaultRefractoryMs };
 
     /** Generates an assertion if this class leaks */
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DriftMap);

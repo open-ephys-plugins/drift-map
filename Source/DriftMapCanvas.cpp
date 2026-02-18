@@ -23,85 +23,122 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 #include "DriftMapCanvas.h"
 
-#include "ColorMap.h"
 #include "DriftMap.h"
 
 #include <algorithm>
+#include <cmath>
 
 StreamScatterView::StreamScatterView (DriftMap* processor_, DriftMapCanvas* owner_, uint16 streamId_)
     : processor (processor_), owner (owner_), streamId (streamId_)
 {
 }
 
+void DriftMapCanvas::refreshTabColours()
+{
+    if (streamTabs == nullptr)
+        return;
+
+    const Colour tabColour = findColour (ThemeColours::componentParentBackground);
+    for (int i = 0; i < streamTabs->getNumTabs(); ++i)
+        streamTabs->setTabBackgroundColour (i, tabColour);
+}
+
 void StreamScatterView::resetSweepState()
 {
-    windowPeaks.clear();
-    latestSample = -1;
-    windowStartSample = -1;
-    heatmapImage = Image();
-    heatmapDirty = true;
-    cachedWindowSamples = 0;
+    sessionStartTimeSeconds = -1.0;
+    secondsPerPixel = 0.0;
+    latestDrawnX = -1;
+    viewStartX = 0.0;
+    viewZoom = 1.0;
+    followLatest = true;
+    isPanning = false;
+    lastDragX = 0;
+    cachedPlotWidth = 0;
+    cachedPlotHeight = 0;
 }
 
-void StreamScatterView::drawPeakOnImage (const DriftMap::PeakEvent& peak, Rectangle<int> plotBounds, int64 windowSamples, int numChannels)
-{
-    if (! heatmapImage.isValid() || windowSamples <= 0)
-        return;
-
-    const int64 dx = peak.sampleNumber - windowStartSample;
-    if (dx < 0 || dx >= windowSamples)
-        return;
-
-    const int x = (int) ((dx * (plotBounds.getWidth() - 1)) / windowSamples);
-    if (x < 0 || x >= plotBounds.getWidth())
-        return;
-
-    int yPixel = plotBounds.getBottom() - 1;
-    if (numChannels > 1)
-    {
-        const double yNorm = (double) peak.channel / (double) (numChannels - 1);
-        yPixel = plotBounds.getBottom() - 1 - (int) (yNorm * (plotBounds.getHeight() - 1));
-    }
-
-    const int relativeY = yPixel - plotBounds.getY();
-    if (relativeY < 0 || relativeY >= plotBounds.getHeight())
-        return;
-
-    const float maxAmpUv = (float) owner->getMaxAmplitudeUv();
-    const float normalized = jlimit (0.0f, 1.0f, jmax (0.0f, peak.amplitude) / jmax (1.0f, maxAmpUv));
-    const Colour pointColour = ColorMap::getColorForNormalizedValue (normalized).withAlpha (0.92f);
-
-    Graphics imageGraphics (heatmapImage);
-    imageGraphics.setColour (pointColour);
-
-    constexpr float circleDiameter = 3.5f;
-    constexpr float radius = circleDiameter * 0.5f;
-    imageGraphics.fillEllipse ((float) x - radius,
-                               (float) relativeY - radius,
-                               circleDiameter,
-                               circleDiameter);
-}
-
-void StreamScatterView::rebuildHeatmapImage (Rectangle<int> plotBounds, int64 windowSamples, int numChannels)
+void StreamScatterView::ensureSessionImage (Rectangle<int> plotBounds)
 {
     if (plotBounds.getWidth() <= 1 || plotBounds.getHeight() <= 1)
         return;
 
-    heatmapImage = Image (Image::ARGB,
-                          plotBounds.getWidth(),
-                          plotBounds.getHeight(),
-                          true,
-                          SoftwareImageType());
-    Graphics imageGraphics (heatmapImage);
-    imageGraphics.fillAll (Colours::transparentBlack);
-
-    for (const auto& peak : windowPeaks)
-        drawPeakOnImage (peak, plotBounds, windowSamples, numChannels);
-
-    heatmapDirty = false;
     cachedPlotWidth = plotBounds.getWidth();
     cachedPlotHeight = plotBounds.getHeight();
-    cachedWindowSamples = windowSamples;
+
+    if (sessionImage.isValid())
+        return;
+
+    const int initialWidth = jmax (4096 * 4, plotBounds.getWidth() * 12);
+    const int initialHeight = jmax (1024, plotBounds.getHeight() * 2);
+
+    sessionImage = Image (Image::ARGB, initialWidth, initialHeight, true, SoftwareImageType());
+    sessionImage.clear (sessionImage.getBounds(), clearColour);
+    invertedSessionImage = Image();
+    invertedDirty = true;
+}
+
+void StreamScatterView::extendSessionImageWidth (int requiredX)
+{
+    if (! sessionImage.isValid() || requiredX < sessionImage.getWidth())
+        return;
+
+    int newWidth = sessionImage.getWidth();
+    while (requiredX >= newWidth)
+        newWidth *= 2;
+
+    Image grown (Image::ARGB, newWidth, sessionImage.getHeight(), true, SoftwareImageType());
+    grown.clear (grown.getBounds(), clearColour);
+
+    Graphics g (grown);
+    g.drawImageAt (sessionImage, 0, 0, false);
+    sessionImage = std::move (grown);
+    invertedSessionImage = Image();
+    invertedDirty = true;
+}
+
+void StreamScatterView::drawPeakOnSessionImage (const DriftMap::PeakEvent& peak, int numChannels)
+{
+    if (! sessionImage.isValid() || numChannels <= 0 || secondsPerPixel <= 0.0)
+        return;
+
+    if (sessionStartTimeSeconds < 0.0)
+        sessionStartTimeSeconds = peak.timestamp;
+
+    const int x = (int) std::floor ((peak.timestamp - sessionStartTimeSeconds) / secondsPerPixel);
+    if (x < 0)
+        return;
+
+    extendSessionImageWidth (x);
+    if (x >= sessionImage.getWidth())
+        return;
+
+    int yPixel = sessionImage.getHeight() - 1;
+    if (numChannels > 1)
+    {
+        const double yNorm = (double) peak.channel / (double) (numChannels - 1);
+        yPixel = sessionImage.getHeight() - 1 - (int) (yNorm * (sessionImage.getHeight() - 1));
+    }
+
+    if (yPixel < 0 || yPixel >= sessionImage.getHeight())
+        return;
+
+    constexpr float maxAmpUv = 250.0f;
+    const float normalized = jlimit (0.0f, 1.0f, jmax (0.0f, peak.amplitude) / jmax (1.0f, maxAmpUv));
+    const uint8 intensity = (uint8) jlimit (0, 255, 55 + (int) std::round (normalized * 200.0f));
+    const Colour pointColour (intensity, intensity, intensity, (uint8) 230);
+
+    const float circleDiameter = jlimit (2.0f, 14.0f, (float) sessionImage.getHeight() * 0.006f);
+    const float radius = circleDiameter * 0.5f;
+
+    Graphics imageGraphics (sessionImage);
+    imageGraphics.setColour (pointColour);
+    imageGraphics.fillEllipse ((float) x - radius,
+                               (float) yPixel - radius,
+                               circleDiameter / 2.0f,
+                               circleDiameter);
+
+    latestDrawnX = jmax (latestDrawnX, x);
+    invertedDirty = true;
 }
 
 void StreamScatterView::appendPeaksFromProcessor()
@@ -110,13 +147,25 @@ void StreamScatterView::appendPeaksFromProcessor()
         return;
 
     const int numChannels = processor->getNumChannelsForStream (streamId);
-    const double sampleRate = processor->getSampleRateForStream (streamId);
-    if (numChannels <= 0 || sampleRate <= 0.0)
+    if (numChannels <= 0)
         return;
 
-    const int64 windowSamples = (int64) (sampleRate * owner->getDisplayWindowSeconds());
-    if (windowSamples <= 0)
+    Rectangle<int> plotBounds = getLocalBounds().reduced (16);
+    ensureSessionImage (plotBounds);
+    if (! sessionImage.isValid())
         return;
+
+    if (secondsPerPixel <= 0.0)
+        secondsPerPixel = (double) owner->getDisplayWindowSeconds() / (double) jmax (1, cachedPlotWidth);
+
+    bool wasAtLatestEdge = false;
+    if (! followLatest && latestDrawnX >= 0)
+    {
+        const double baseVisibleWidth = (double) owner->getDisplayWindowSeconds() / secondsPerPixel;
+        const int visibleSourceWidth = jmax (1, (int) std::round (baseVisibleWidth / viewZoom));
+        const int maxStartBefore = jmax (0, latestDrawnX - visibleSourceWidth + 1);
+        wasAtLatestEdge = std::abs (viewStartX - (double) maxStartBefore) <= 1.0;
+    }
 
     std::vector<DriftMap::PeakEvent> newPeaks;
     if (! processor->drainPeaks (streamId, newPeaks) || newPeaks.empty())
@@ -124,65 +173,16 @@ void StreamScatterView::appendPeaksFromProcessor()
 
     std::sort (newPeaks.begin(),
                newPeaks.end(),
-               [] (const DriftMap::PeakEvent& a, const DriftMap::PeakEvent& b) { return a.sampleNumber < b.sampleNumber; });
-
-    latestSample = jmax (latestSample, newPeaks.back().sampleNumber);
-
-    Rectangle<int> plotBounds = getLocalBounds().reduced (16);
-    const bool needResetForGeometry = ! heatmapImage.isValid()
-                                      || plotBounds.getWidth() != cachedPlotWidth
-                                      || plotBounds.getHeight() != cachedPlotHeight
-                                      || windowSamples != cachedWindowSamples;
-
-    if (needResetForGeometry)
-    {
-        heatmapImage = Image (Image::ARGB,
-                              jmax (2, plotBounds.getWidth()),
-                              jmax (2, plotBounds.getHeight()),
-                              true,
-                              SoftwareImageType());
-        Graphics imageGraphics (heatmapImage);
-        imageGraphics.fillAll (Colours::transparentBlack);
-        cachedPlotWidth = plotBounds.getWidth();
-        cachedPlotHeight = plotBounds.getHeight();
-        cachedWindowSamples = windowSamples;
-        heatmapDirty = false;
-    }
-
-    if (windowStartSample < 0)
-    {
-        const int64 firstSample = newPeaks.front().sampleNumber;
-        windowStartSample = (firstSample / windowSamples) * windowSamples;
-    }
+               [] (const DriftMap::PeakEvent& a, const DriftMap::PeakEvent& b) { return a.timestamp < b.timestamp; });
 
     for (const auto& peak : newPeaks)
-    {
-        while (peak.sampleNumber >= windowStartSample + windowSamples)
-        {
-            windowStartSample += windowSamples;
-            windowPeaks.clear();
+        drawPeakOnSessionImage (peak, numChannels);
 
-            if (heatmapImage.isValid())
-            {
-                Graphics imageGraphics (heatmapImage);
-                imageGraphics.fillAll (Colours::transparentBlack);
-            }
-        }
+    if (followLatest || wasAtLatestEdge)
+        followLatest = true;
 
-        if (peak.sampleNumber < windowStartSample)
-            continue;
-
-        windowPeaks.push_back (peak);
-        drawPeakOnImage (peak, plotBounds, windowSamples, numChannels);
-    }
-
-    constexpr size_t maxWindowPeaks = 300000;
-    if (windowPeaks.size() > maxWindowPeaks)
-    {
-        const size_t removeCount = windowPeaks.size() - maxWindowPeaks;
-        windowPeaks.erase (windowPeaks.begin(), windowPeaks.begin() + (int64) removeCount);
-        heatmapDirty = true;
-    }
+    if (followLatest)
+        resetViewToLatest();
 }
 
 void StreamScatterView::refreshFromProcessor()
@@ -193,46 +193,257 @@ void StreamScatterView::refreshFromProcessor()
 
 void StreamScatterView::clearHistory()
 {
+    if (sessionImage.isValid())
+    {
+        sessionImage.clear (sessionImage.getBounds(), clearColour);
+        invertedSessionImage = Image();
+        invertedDirty = true;
+    }
+
     resetSweepState();
     repaint();
 }
 
-void StreamScatterView::invalidateHeatmap()
+void StreamScatterView::setLightMode (bool enabled)
 {
-    heatmapDirty = true;
+    lightModeEnabled = enabled;
+    repaint();
+}
+
+void StreamScatterView::setTimebaseSeconds (double timebaseSeconds)
+{
+    if (! sessionImage.isValid() || secondsPerPixel <= 0.0 || timebaseSeconds <= 0.0)
+        return;
+    if (latestDrawnX < 0)
+        return;
+
+    viewZoom = 1.0;
+    followLatest = true;
+    resetViewToLatest();
+
+    repaint();
+}
+
+void StreamScatterView::updateThemeCacheIfNeeded()
+{
+    if (! lightModeEnabled || ! sessionImage.isValid())
+        return;
+
+    if (! invertedDirty
+        && invertedSessionImage.isValid()
+        && invertedSessionImage.getWidth() == sessionImage.getWidth()
+        && invertedSessionImage.getHeight() == sessionImage.getHeight())
+    {
+        return;
+    }
+
+    invertedSessionImage = Image (Image::ARGB,
+                                  sessionImage.getWidth(),
+                                  sessionImage.getHeight(),
+                                  true,
+                                  SoftwareImageType());
+
+    Image::BitmapData src (sessionImage, Image::BitmapData::readOnly);
+    Image::BitmapData dst (invertedSessionImage, Image::BitmapData::writeOnly);
+
+    for (int y = 0; y < src.height; ++y)
+    {
+        const uint8* srcLine = src.getLinePointer (y);
+        uint8* dstLine = dst.getLinePointer (y);
+
+        for (int x = 0; x < src.width; ++x)
+        {
+            const int offset = x * 4;
+            dstLine[offset + 0] = (uint8) (255 - srcLine[offset + 0]);
+            dstLine[offset + 1] = (uint8) (255 - srcLine[offset + 1]);
+            dstLine[offset + 2] = (uint8) (255 - srcLine[offset + 2]);
+            dstLine[offset + 3] = srcLine[offset + 3];
+        }
+    }
+
+    invertedDirty = false;
+}
+
+void StreamScatterView::resetViewToLatest()
+{
+    if (! sessionImage.isValid() || latestDrawnX < 0)
+        return;
+    const double baseVisibleWidth = (double) owner->getDisplayWindowSeconds() / secondsPerPixel;
+    const int visibleSourceWidth = jmax (1, (int) std::round (baseVisibleWidth / viewZoom));
+    const int maxStart = jmax (0, latestDrawnX - visibleSourceWidth + 1);
+    viewStartX = (double) maxStart;
+}
+
+void StreamScatterView::mouseDown (const MouseEvent& event)
+{
+    auto contentBounds = getLocalBounds().reduced (16);
+    Rectangle<int> plotBounds = contentBounds.withTrimmedBottom (22);
+    if (! plotBounds.contains (event.getPosition()))
+        return;
+
+    isPanning = true;
+    followLatest = false;
+    lastDragX = event.x;
+}
+
+void StreamScatterView::mouseDrag (const MouseEvent& event)
+{
+    if (! isPanning || ! sessionImage.isValid() || cachedPlotWidth <= 1 || latestDrawnX < 0)
+        return;
+
+    const int dx = event.x - lastDragX;
+    lastDragX = event.x;
+
+    const double baseVisibleWidth = (double) owner->getDisplayWindowSeconds() / secondsPerPixel;
+    const double visibleSourceWidth = jmax (1.0, baseVisibleWidth / viewZoom);
+    const int maxStart = jmax (0, latestDrawnX - (int) std::round (visibleSourceWidth) + 1);
+    const double sourceDelta = -((double) dx * (visibleSourceWidth / (double) cachedPlotWidth));
+    viewStartX = jlimit (0.0,
+                         (double) maxStart,
+                         viewStartX + sourceDelta);
+    followLatest = std::abs (viewStartX - (double) maxStart) <= 1.0;
+
+    repaint();
+}
+
+void StreamScatterView::mouseUp (const MouseEvent& event)
+{
+    isPanning = false;
+}
+
+void StreamScatterView::mouseWheelMove (const MouseEvent& event, const MouseWheelDetails& wheel)
+{
+    if (! sessionImage.isValid() || cachedPlotWidth <= 1 || latestDrawnX < 0 || std::abs (wheel.deltaY) < 0.0001f)
+        return;
+    auto contentBounds = getLocalBounds().reduced (16);
+    Rectangle<int> plotBounds = contentBounds.withTrimmedBottom (22);
+    if (! plotBounds.contains (event.getPosition()))
+        return;
+
+    followLatest = false;
+
+    const double baseVisibleWidth = (double) owner->getDisplayWindowSeconds() / secondsPerPixel;
+    const double oldVisibleWidth = jmax (1.0, baseVisibleWidth / viewZoom);
+    const double zoomFactor = wheel.deltaY > 0.0f ? 1.15 : (1.0 / 1.15);
+    viewZoom = jlimit (1.0, 64.0, viewZoom * zoomFactor);
+    const double newVisibleWidth = jmax (1.0, baseVisibleWidth / viewZoom);
+
+    const double u = jlimit (0.0, 1.0, (double) (event.x - plotBounds.getX()) / (double) jmax (1, plotBounds.getWidth()));
+    const double anchorX = viewStartX + u * oldVisibleWidth;
+    viewStartX = anchorX - u * newVisibleWidth;
+    const int maxStart = jmax (0, latestDrawnX - (int) std::round (newVisibleWidth) + 1);
+    viewStartX = jlimit (0.0, (double) maxStart, viewStartX);
+    followLatest = std::abs (viewStartX - (double) maxStart) <= 1.0;
+
+    repaint();
+}
+
+void StreamScatterView::mouseDoubleClick (const MouseEvent& event)
+{
+    followLatest = true;
+    resetViewToLatest();
     repaint();
 }
 
 void StreamScatterView::paint (Graphics& g)
 {
-    g.fillAll (findColour (ThemeColours::componentParentBackground));
-
-    Rectangle<int> plotBounds = getLocalBounds().reduced (16);
-    g.setColour (Colours::darkgrey);
+    g.fillAll (lightModeEnabled ? Colour (200, 200, 200) : Colour (50, 50, 50));
+    auto contentBounds = getLocalBounds().reduced (16);
+    Rectangle<int> timelineBounds = contentBounds.removeFromBottom (20);
+    Rectangle<int> plotBounds = contentBounds;
+    g.setColour (lightModeEnabled ? Colours::grey : Colours::darkgrey);
     g.drawRect (plotBounds);
 
     if (processor == nullptr || owner == nullptr || plotBounds.getWidth() <= 1 || plotBounds.getHeight() <= 1)
         return;
 
-    const double sampleRate = processor->getSampleRateForStream (streamId);
-    const int numChannels = processor->getNumChannelsForStream (streamId);
-    const int64 windowSamples = (int64) (sampleRate * owner->getDisplayWindowSeconds());
-    if (sampleRate <= 0.0 || numChannels <= 0 || windowSamples <= 0)
+    ensureSessionImage (plotBounds);
+    if (! sessionImage.isValid())
         return;
 
-    if (! heatmapImage.isValid()
-        || plotBounds.getWidth() != cachedPlotWidth
-        || plotBounds.getHeight() != cachedPlotHeight
-        || windowSamples != cachedWindowSamples)
+    cachedPlotWidth = plotBounds.getWidth();
+    cachedPlotHeight = plotBounds.getHeight();
+
+    if (followLatest)
+        resetViewToLatest();
+    const double baseVisibleWidth = (double) owner->getDisplayWindowSeconds() / secondsPerPixel;
+    const int visibleSourceWidth = jmax (1, (int) std::round (baseVisibleWidth / viewZoom));
+    const int maxStart = (latestDrawnX >= 0) ? jmax (0, latestDrawnX - visibleSourceWidth + 1) : 0;
+    const int sourceX = jlimit (0,
+                                maxStart,
+                                (int) std::round (viewStartX));
+
+    const Image* sourceImage = &sessionImage;
+    if (lightModeEnabled)
     {
-        heatmapDirty = true;
+        updateThemeCacheIfNeeded();
+        if (invertedSessionImage.isValid())
+            sourceImage = &invertedSessionImage;
     }
 
-    if (heatmapDirty)
-        rebuildHeatmapImage (plotBounds, windowSamples, numChannels);
+    g.drawImage (*sourceImage,
+                 plotBounds.getX(),
+                 plotBounds.getY(),
+                 plotBounds.getWidth(),
+                 plotBounds.getHeight(),
+                 sourceX,
+                 0,
+                 visibleSourceWidth,
+                 sourceImage->getHeight(),
+                 false);
 
-    if (heatmapImage.isValid())
-        g.drawImageAt (heatmapImage, plotBounds.getX(), plotBounds.getY(), false);
+    g.setColour (lightModeEnabled ? Colours::black.withAlpha (0.2f) : Colours::white.withAlpha (0.2f));
+    g.drawLine ((float) timelineBounds.getX(),
+                (float) timelineBounds.getY(),
+                (float) timelineBounds.getRight(),
+                (float) timelineBounds.getY(),
+                1.0f);
+
+    const double visibleSeconds = visibleSourceWidth * secondsPerPixel;
+    const double visibleMinutes = visibleSeconds / 60.0;
+    if (visibleMinutes <= 0.0)
+        return;
+    const double minutesAtLeft = ((double) sourceX * secondsPerPixel) / 60.0;
+    const double minutesAtRight = minutesAtLeft + visibleMinutes;
+
+    g.setFont (FontOptions().withHeight (13.0f));
+    const double roughStep = visibleMinutes / 6.0;
+    const double decade = std::pow (10.0, std::floor (std::log10 (jmax (roughStep, 1.0e-9))));
+    const double normalized = roughStep / decade;
+    double stepNorm = 1.0;
+    if (normalized > 5.0)
+        stepNorm = 10.0;
+    else if (normalized > 2.0)
+        stepNorm = 5.0;
+    else if (normalized > 1.0)
+        stepNorm = 2.0;
+    const double tickStepMinutes = stepNorm * decade;
+
+    int decimals = 0;
+    if (tickStepMinutes < 1.0)
+        decimals = jlimit (0, 3, (int) std::ceil (-std::log10 (tickStepMinutes)));
+    const double firstTickMinutes = std::ceil (minutesAtLeft / tickStepMinutes) * tickStepMinutes;
+    for (double tickMinutes = firstTickMinutes;
+         tickMinutes <= minutesAtRight + (tickStepMinutes * 0.25);
+         tickMinutes += tickStepMinutes)
+    {
+        const double t = (tickMinutes - minutesAtLeft) / visibleMinutes;
+        const int x = jlimit (timelineBounds.getX(),
+                              timelineBounds.getRight(),
+                              timelineBounds.getX() + (int) std::round (t * (double) plotBounds.getWidth()));
+        g.drawLine ((float) x, (float) timelineBounds.getY(), (float) x, (float) timelineBounds.getY() + 4.0f, 1.0f);
+        String label = (decimals == 0) ? String ((int) std::round (tickMinutes))
+                                       : String (tickMinutes, decimals);
+        label << " min";
+
+        g.drawText (label,
+                    x - 32,
+                    timelineBounds.getY() + 5,
+                    60,
+                    timelineBounds.getHeight() - 5,
+                    Justification::centredTop,
+                    false);
+    }
 }
 
 OptionsBar::OptionsBar (DriftMapCanvas* canvas_, DriftMap* processor_)
@@ -256,15 +467,11 @@ OptionsBar::OptionsBar (DriftMapCanvas* canvas_, DriftMap* processor_)
 
     auto* windowEditor = new ComboBoxParameterEditor (canvas->getParameter ("display_window_s"), 25, 200);
     windowEditor->setLayout (ParameterEditor::Layout::nameOnLeft);
-    addParameterEditor (windowEditor, 470, 12);
+    addParameterEditor (windowEditor, 465, 12);
 
-    auto* maxAmpEditor = new ComboBoxParameterEditor (canvas->getParameter ("max_amplitude_uv"), 25, 180);
-    maxAmpEditor->setLayout (ParameterEditor::Layout::nameOnLeft);
-    addParameterEditor (maxAmpEditor, 640, 12);
-
-    auto* colorMapEditor = new ComboBoxParameterEditor (canvas->getParameter ("color_map"), 25, 170);
-    colorMapEditor->setLayout (ParameterEditor::Layout::nameOnLeft);
-    addParameterEditor (colorMapEditor, 810, 12);
+    auto* themeEditor = new ComboBoxParameterEditor (canvas->getParameter ("theme_mode"), 25, 170);
+    themeEditor->setLayout (ParameterEditor::Layout::nameOnLeft);
+    addParameterEditor (themeEditor, 660, 12);
 }
 
 void OptionsBar::buttonClicked (Button* button)
@@ -296,51 +503,38 @@ DriftMapCanvas::DriftMapCanvas (DriftMap* processor_)
     refreshRate = 10;
 
     Array<String> windows;
+    windows.add ("1");
+    windows.add ("2");
+    windows.add ("5");
     windows.add ("10");
+    windows.add ("15");
     windows.add ("30");
     windows.add ("60");
-    windows.add ("300");
 
-    Array<String> colorMaps;
-    colorMaps.add ("Greys");
-    colorMaps.add ("Cividis");
-    colorMaps.add ("Viridis");
-    colorMaps.add ("RdGy");
-    colorMaps.add ("RdBu");
-
-    Array<String> maxAmplitudes;
-    maxAmplitudes.add ("50");
-    maxAmplitudes.add ("100");
-    maxAmplitudes.add ("250");
-    maxAmplitudes.add ("500");
-    maxAmplitudes.add ("1000");
-    maxAmplitudes.add ("2000");
+    Array<String> themes;
+    themes.add ("Dark");
+    themes.add ("Light");
 
     addCategoricalParameter ("display_window_s",
-                             "Display Window (s)",
-                             "Visible time range in seconds",
+                             "Timebase (min)",
+                             "Visible time range in minutes",
                              windows,
                              2);
 
-    addCategoricalParameter ("color_map",
-                             "Color Map",
-                             "Color map for drift heatmap amplitudes",
-                             colorMaps,
-                             1);
-
-    addCategoricalParameter ("max_amplitude_uv",
-                             "Max Amplitude (uV)",
-                             "Fixed amplitude scale for heatmap coloring",
-                             maxAmplitudes,
-                             2);
-
-    ColorMap::setColorMap (ColorMapId::CIVIDIS);
-
-    optionsBar = new OptionsBar (this, processor);
-    addParameterEditorOwner (optionsBar);
+    addCategoricalParameter ("theme_mode",
+                             "Theme",
+                             "Display theme for drift image",
+                             themes,
+                             0);
 
     streamTabs = std::make_unique<TabbedComponent> (TabbedButtonBar::TabsAtTop);
     addAndMakeVisible (streamTabs.get());
+    optionsViewport = std::make_unique<Viewport>();
+    optionsViewport->setScrollBarsShown (false, true);
+    optionsViewport->setScrollOnDragEnabled (true);
+    addAndMakeVisible (optionsViewport.get());
+    optionsBar = std::make_unique<OptionsBar> (this, processor);
+    optionsViewport->setViewedComponent (optionsBar.get(), false);
 
     rebuildTabs();
 }
@@ -348,13 +542,25 @@ DriftMapCanvas::DriftMapCanvas (DriftMap* processor_)
 void DriftMapCanvas::resized()
 {
     const int optionsHeight = 50;
-    optionsBar->setBounds (0, getHeight() - optionsHeight, getWidth(), optionsHeight);
+    const int minOptionsWidth = 980;
     streamTabs->setBounds (0, 0, getWidth(), getHeight() - optionsHeight);
+    if (optionsViewport != nullptr && optionsBar != nullptr)
+    {
+        optionsViewport->setBounds (0, getHeight() - optionsHeight, getWidth(), optionsHeight);
+        optionsBar->setBounds (0, 0, jmax (minOptionsWidth, optionsViewport->getWidth()), optionsHeight);
+
+        optionsViewport->toFront (false);
+    }
 }
 
 void DriftMapCanvas::paint (Graphics& g)
 {
     g.fillAll (findColour (ThemeColours::componentParentBackground));
+}
+void DriftMapCanvas::lookAndFeelChanged()
+{
+    refreshTabColours();
+    repaint();
 }
 
 void DriftMapCanvas::refresh()
@@ -366,28 +572,27 @@ void DriftMapCanvas::refresh()
 
 void DriftMapCanvas::parameterValueChanged (Parameter* param)
 {
-    if (param->getName().equalsIgnoreCase ("color_map"))
-    {
-        const int colorMapIndex = (int) param->getValue() + 1;
-        ColorMap::setColorMap ((ColorMapId) colorMapIndex);
-    }
+    const bool isThemeChange = param->getName().equalsIgnoreCase ("theme_mode");
+    const bool isWindowChange = param->getName().equalsIgnoreCase ("display_window_s");
 
-    if (param->getName().equalsIgnoreCase ("display_window_s")
-        || param->getName().equalsIgnoreCase ("color_map")
-        || param->getName().equalsIgnoreCase ("max_amplitude_uv"))
+    if (! isThemeChange && ! isWindowChange)
+        return;
+
+    const bool lightMode = isThemeChange && ((int) param->getValue() == 1);
+    const double timebaseSeconds = (double) getDisplayWindowSeconds();
+
+    for (int i = 0; i < streamTabs->getNumTabs(); ++i)
     {
-        for (int i = 0; i < streamTabs->getNumTabs(); ++i)
-        {
-            auto* view = dynamic_cast<StreamScatterView*> (streamTabs->getTabContentComponent (i));
-            if (view != nullptr)
-            {
-                if (param->getName().equalsIgnoreCase ("display_window_s"))
-                    view->clearHistory();
-                else
-                    view->invalidateHeatmap();
-                view->refreshFromProcessor();
-            }
-        }
+        auto* view = dynamic_cast<StreamScatterView*> (streamTabs->getTabContentComponent (i));
+        if (view == nullptr)
+            continue;
+
+        if (isThemeChange)
+            view->setLightMode (lightMode);
+        if (isWindowChange)
+            view->setTimebaseSeconds (timebaseSeconds);
+
+        view->refreshFromProcessor();
     }
 }
 
@@ -409,19 +614,8 @@ int DriftMapCanvas::getDisplayWindowSeconds() const
     auto* windowParam = getParameter ("display_window_s");
     if (windowParam == nullptr)
         return 60;
-
-    const int windowSeconds = windowParam->getValueAsString().getIntValue();
-    return windowSeconds > 0 ? windowSeconds : 60;
-}
-
-int DriftMapCanvas::getMaxAmplitudeUv() const
-{
-    auto* maxAmpParam = getParameter ("max_amplitude_uv");
-    if (maxAmpParam == nullptr)
-        return 250;
-
-    const int maxAmpUv = maxAmpParam->getValueAsString().getIntValue();
-    return maxAmpUv > 0 ? maxAmpUv : 250;
+    const int windowMinutes = windowParam->getValueAsString().getIntValue();
+    return jmax (1, windowMinutes) * 60;
 }
 
 void DriftMapCanvas::clearAllViews()
@@ -448,8 +642,13 @@ void DriftMapCanvas::rebuildTabs()
         label << " (" << String (stream->getSourceNodeId()) << ")";
 
         auto* view = new StreamScatterView (processor, this, streamId);
+        auto* themeParam = getParameter ("theme_mode");
+        if (themeParam != nullptr)
+            view->setLightMode ((int) themeParam->getValue() == 1);
         streamTabs->addTab (label, findColour (ThemeColours::componentParentBackground), view, true);
     }
+
+    refreshTabColours();
 }
 
 StreamScatterView* DriftMapCanvas::getCurrentView() const

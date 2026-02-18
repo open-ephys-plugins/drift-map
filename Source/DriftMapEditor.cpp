@@ -34,5 +34,4 @@ DriftMapEditor::DriftMapEditor (GenericProcessor* p)
 Visualizer* DriftMapEditor::createNewCanvas()
 {
     return new DriftMapCanvas ((DriftMap*) getProcessor());
-    ;
 }

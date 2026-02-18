@@ -1,14 +1,14 @@
-# Data Snapshot
+# Drift Map
 
-View a short snippet of data as an image (samples x channels).
+View a zoomed-out spike raster over very long intervals.
 
 ## Installation
 
-This plugin can be added via the Open Ephys GUI Plugin Installer. To access the Plugin Installer, press **ctrl-P** or **⌘P** from inside the GUI. Once the installer is loaded, browse to the "Data Snapshot" plugin and click "Install."
+This plugin can be added via the Open Ephys GUI Plugin Installer. To access the Plugin Installer, press **ctrl-P** or **⌘P** from inside the GUI. Once the installer is loaded, browse to the "Drift Map" plugin and click "Install."
 
 ## Usage
 
-Instructions for using the Data Snapshot plugin are available XXX
+Instructions for using the Drift Map plugin are available XXX
 
 ## Building from source
 
@@ -23,7 +23,7 @@ Code
 │   ├── Source
 │   └── ...
 ├── OEPlugins
-│   └── data-snapshot
+│   └── drift-map
 │       ├── Build
 │       ├── Source
 │       └── ...
@@ -39,7 +39,7 @@ From the `Build` directory, enter:
 cmake -G "Visual Studio 17 2022" -A x64 ..
 ```
 
-Next, launch Visual Studio and open the `OE_PLUGIN_data-snapshot.sln` file that was just created. Select the appropriate configuration (Debug/Release) and build the solution.
+Next, launch Visual Studio and open the `OE_PLUGIN_drift-map_.sln` file that was just created. Select the appropriate configuration (Debug/Release) and build the solution.
 
 Selecting the `INSTALL` project and manually building it will copy the `.dll` and any other required files into the GUI's `plugins` directory. The next time you launch the GUI from Visual Studio, the Data Snapshot plugin should be available.
 
@@ -70,9 +70,9 @@ From the `Build` directory, enter:
 cmake -G "Xcode" ..
 ```
 
-Next, launch Xcode and open the `data-snapshot.xcodeproj` file that now lives in the “Build” directory.
+Next, launch Xcode and open the `drift-map.xcodeproj` file that now lives in the “Build” directory.
 
-Running the `ALL_BUILD` scheme will compile the plugin; running the `INSTALL` scheme will install the `.bundle` file to `/Users/<username>/Library/Application Support/open-ephys/plugins-api8`. the Data Snapshot plugin should be available the next time you launch the GUI from Xcode.
+Running the `ALL_BUILD` scheme will compile the plugin; running the `INSTALL` scheme will install the `.bundle` file to `/Users/<username>/Library/Application Support/open-ephys/plugins-api10`. the Data Snapshot plugin should be available the next time you launch the GUI from Xcode.
 
 
 

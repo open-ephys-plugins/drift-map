@@ -155,7 +155,10 @@ void StreamScatterView::drawPeakOnSessionImage (const DriftMap::PeakEvent& peak,
     int yPixel = sessionImage.getHeight() - 1;
     if (numChannels > 1)
     {
-        const double yNorm = (double) peak.channel / (double) (numChannels - 1);
+        const int displayChannel = jlimit (0,
+                                           numChannels - 1,
+                                           processor->getDisplayChannelForStream (streamId, (int) peak.channel));
+        const double yNorm = (double) displayChannel / (double) (numChannels - 1);
         yPixel = sessionImage.getHeight() - 1 - (int) (yNorm * (sessionImage.getHeight() - 1));
     }
 
@@ -695,7 +698,16 @@ void DriftMapCanvas::clearAllViews()
 
 void DriftMapCanvas::rebuildTabs()
 {
+    uint16 previouslySelectedStreamId = 0;
+    bool hadSelectedStream = false;
+    if (auto* currentView = getCurrentView())
+    {
+        previouslySelectedStreamId = currentView->getStreamId();
+        hadSelectedStream = true;
+    }
     streamTabs->clearTabs();
+    int tabIndexToSelect = 0;
+    int createdTabIndex = 0;
 
     auto streams = processor->getDataStreams();
     for (auto stream : streams)
@@ -711,8 +723,15 @@ void DriftMapCanvas::rebuildTabs()
         if (themeParam != nullptr)
             view->setLightMode ((int) themeParam->getValue() == 1);
         streamTabs->addTab (label, findColour (ThemeColours::componentParentBackground), view, true);
+
+        if (hadSelectedStream && streamId == previouslySelectedStreamId)
+            tabIndexToSelect = createdTabIndex;
+
+        ++createdTabIndex;
     }
 
+    if (streamTabs->getNumTabs() > 0)
+        streamTabs->setCurrentTabIndex (jlimit (0, streamTabs->getNumTabs() - 1, tabIndexToSelect));
     refreshTabColours();
 }
 

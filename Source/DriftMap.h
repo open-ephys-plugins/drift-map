@@ -91,6 +91,7 @@ public:
     /** Returns stream metadata used by the canvas. */
     int getNumChannelsForStream (uint16 streamId) const;
     double getSampleRateForStream (uint16 streamId) const;
+    int getDisplayChannelForStream (uint16 streamId, int localChannel) const;
 
     /** Clears pending and historical processor-side peak state. */
     void clearDriftData();
@@ -110,6 +111,7 @@ private:
         double sampleRate = 0.0;
         std::vector<ChannelPeakState> channelStates;
         std::vector<int> globalChannelIndices;
+        std::vector<int> displayChannelOrder;
         std::vector<PeakEvent> pendingPeaks;
         std::unique_ptr<CriticalSection> pendingLock;
         int64 lastCumulativeBlockEndSample = 0;

@@ -24,6 +24,9 @@
 #include "DriftMap.h"
 
 #include "DriftMapEditor.h"
+#include <algorithm>
+#include <cmath>
+#include <numeric>
 
 DriftMap::DriftMap()
     : GenericProcessor ("Drift Map")
@@ -78,10 +81,93 @@ void DriftMap::updateSettings()
         streamState.sampleRate = stream->getSampleRate();
         streamState.channelStates.resize ((size_t) streamState.numChannels);
         streamState.globalChannelIndices.resize ((size_t) streamState.numChannels);
+        streamState.displayChannelOrder.resize ((size_t) streamState.numChannels);
 
         const uint16 streamId = stream->getStreamId();
         for (int localChannel = 0; localChannel < streamState.numChannels; ++localChannel)
+        {
             streamState.globalChannelIndices[(size_t) localChannel] = getGlobalChannelIndex (streamId, localChannel);
+            streamState.displayChannelOrder[(size_t) localChannel] = localChannel;
+        }
+
+        auto continuousChannels = stream->getContinuousChannels();
+        if (continuousChannels.size() == streamState.numChannels && streamState.numChannels > 0)
+        {
+            std::vector<float> depths ((size_t) streamState.numChannels, 0.0f);
+            std::vector<float> xposValues ((size_t) streamState.numChannels, 0.0f);
+            std::vector<int> groups ((size_t) streamState.numChannels, 0);
+            std::vector<bool> hasYposMetadata ((size_t) streamState.numChannels, false);
+            std::vector<bool> hasXposMetadata ((size_t) streamState.numChannels, false);
+            std::vector<bool> hasGroupMetadata ((size_t) streamState.numChannels, false);
+
+            bool allSame = true;
+            bool anyYposMetadata = false;
+            bool anyXposMetadata = false;
+            bool anyGroupMetadata = false;
+            float last = 0.0f;
+
+            for (int i = 0; i < streamState.numChannels; ++i)
+            {
+                const auto* channel = continuousChannels[i];
+                if (channel == nullptr)
+                    continue;
+
+                float ypos = channel->position.y;
+                const int yposMetadataIndex = channel->findMetadata (MetadataDescriptor::MetadataType::FLOAT, 1, "channel.ypos");
+                if (yposMetadataIndex >= 0)
+                {
+                    if (const auto* yposValue = channel->getMetadataValue (yposMetadataIndex))
+                    {
+                        yposValue->getValue (ypos);
+                        hasYposMetadata[(size_t) i] = true;
+                        hasXposMetadata[(size_t) i] = true;
+                    }
+                }
+
+                depths[(size_t) i] = ypos;
+                xposValues[(size_t) i] = channel->position.x;
+                groups[(size_t) i] = channel->group.number;
+                hasGroupMetadata[(size_t) i] = ! channel->group.name.equalsIgnoreCase ("default");
+
+                anyYposMetadata = anyYposMetadata || hasYposMetadata[(size_t) i];
+                anyXposMetadata = anyXposMetadata || hasXposMetadata[(size_t) i];
+                anyGroupMetadata = anyGroupMetadata || hasGroupMetadata[(size_t) i];
+
+                if (i == 0)
+                    last = depths[(size_t) i];
+                else if (depths[(size_t) i] != last)
+                    allSame = false;
+            }
+
+            const bool positionMetadataAvailable = anyYposMetadata && anyXposMetadata;
+            const bool groupMetadataAvailable = anyGroupMetadata;
+
+            if (groupMetadataAvailable || ! allSame || anyYposMetadata)
+            {
+                std::vector<int> order ((size_t) streamState.numChannels);
+                std::iota (order.begin(), order.end(), 0);
+
+                std::sort (order.begin(), order.end(), [&] (int i, int j)
+                {
+                    const float depthDiff = depths[(size_t) i] - depths[(size_t) j];
+                    const float depthEpsilon = 1.0e-3f;
+
+                    if (groupMetadataAvailable && groups[(size_t) i] != groups[(size_t) j])
+                        return groups[(size_t) i] < groups[(size_t) j];
+
+                    if (std::abs (depthDiff) >= depthEpsilon)
+                        return depths[(size_t) i] < depths[(size_t) j];
+
+                    if (positionMetadataAvailable)
+                        return xposValues[(size_t) i] < xposValues[(size_t) j];
+
+                    return i < j;
+                });
+
+                for (int orderedIndex = 0; orderedIndex < streamState.numChannels; ++orderedIndex)
+                    streamState.displayChannelOrder[(size_t) order[(size_t) orderedIndex]] = orderedIndex;
+            }
+        }
 
         streamState.pendingPeaks.reserve (maxPendingPeaksPerStream);
         streamState.pendingLock = std::make_unique<CriticalSection>();
@@ -282,6 +368,19 @@ double DriftMap::getSampleRateForStream (uint16 streamId) const
         return 0.0;
 
     return it->second.sampleRate;
+}
+
+int DriftMap::getDisplayChannelForStream (uint16 streamId, int localChannel) const
+{
+    auto it = streamPeaks.find (streamId);
+    if (it == streamPeaks.end())
+        return localChannel;
+
+    const auto& order = it->second.displayChannelOrder;
+    if (localChannel < 0 || localChannel >= (int) order.size())
+        return localChannel;
+
+    return order[(size_t) localChannel];
 }
 
 void DriftMap::clearDriftData()

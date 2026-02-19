@@ -90,6 +90,8 @@ public:
 
     /** Pulls newly detected peaks from the processor and repaints. */
     void refreshFromProcessor();
+    /** Pulls newly detected peaks from the processor with optional repaint. */
+    void updateFromProcessor (bool shouldRepaint);
 
     /** Clears the accumulated session image and view state. */
     void clearHistory();

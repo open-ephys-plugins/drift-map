@@ -237,8 +237,14 @@ void StreamScatterView::appendPeaksFromProcessor()
 
 void StreamScatterView::refreshFromProcessor()
 {
+    updateFromProcessor (true);
+}
+
+void StreamScatterView::updateFromProcessor (bool shouldRepaint)
+{
     appendPeaksFromProcessor();
-    repaint();
+    if (shouldRepaint)
+        repaint();
 }
 
 void StreamScatterView::clearHistory()
@@ -615,9 +621,18 @@ void DriftMapCanvas::lookAndFeelChanged()
 
 void DriftMapCanvas::refresh()
 {
-    auto* view = getCurrentView();
-    if (view != nullptr)
-        view->refreshFromProcessor();
+    if (streamTabs == nullptr)
+        return;
+
+    const int currentTabIndex = streamTabs->getCurrentTabIndex();
+    for (int i = 0; i < streamTabs->getNumTabs(); ++i)
+    {
+        auto* view = dynamic_cast<StreamScatterView*> (streamTabs->getTabContentComponent (i));
+        if (view == nullptr)
+            continue;
+
+        view->updateFromProcessor (i == currentTabIndex);
+    }
 }
 
 void DriftMapCanvas::parameterValueChanged (Parameter* param)

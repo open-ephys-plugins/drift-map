@@ -116,6 +116,9 @@ private:
     /** Grows the session image width to include a required x-coordinate. */
     void extendSessionImageWidth (int requiredX);
 
+    /** Returns the maximum allowed session image width in source pixels. */
+    int getMaxSessionImageWidth() const;
+
     /** Positions the viewport to the newest visible data. */
     void resetViewToLatest();
 
@@ -135,6 +138,7 @@ private:
     double sessionStartTimeSeconds = -1.0;
     double secondsPerPixel = 0.0;
     int latestDrawnX = -1;
+    int64 droppedSourcePixels = 0;
     double viewStartX = 0.0;
     double viewZoom = 1.0;
     bool followLatest = true;

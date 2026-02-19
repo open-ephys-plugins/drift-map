@@ -48,6 +48,7 @@ void StreamScatterView::resetSweepState()
     sessionStartTimeSeconds = -1.0;
     secondsPerPixel = 0.0;
     latestDrawnX = -1;
+    droppedSourcePixels = 0;
     viewStartX = 0.0;
     viewZoom = 1.0;
     followLatest = true;
@@ -79,21 +80,56 @@ void StreamScatterView::ensureSessionImage (Rectangle<int> plotBounds)
 
 void StreamScatterView::extendSessionImageWidth (int requiredX)
 {
-    if (! sessionImage.isValid() || requiredX < sessionImage.getWidth())
+    if (! sessionImage.isValid())
+        return;
+    const int maxWidth = getMaxSessionImageWidth();
+    if (maxWidth <= 1)
         return;
 
-    int newWidth = sessionImage.getWidth();
-    while (requiredX >= newWidth)
-        newWidth *= 2;
+    int targetWidth = sessionImage.getWidth();
+    while (requiredX >= targetWidth && targetWidth < maxWidth)
+        targetWidth = jmin (targetWidth * 2, maxWidth);
 
-    Image grown (Image::ARGB, newWidth, sessionImage.getHeight(), true, SoftwareImageType());
-    grown.clear (grown.getBounds(), clearColour);
+    if (targetWidth != sessionImage.getWidth())
+    {
+        Image grown (Image::ARGB, targetWidth, sessionImage.getHeight(), true, SoftwareImageType());
+        grown.clear (grown.getBounds(), clearColour);
 
-    Graphics g (grown);
-    g.drawImageAt (sessionImage, 0, 0, false);
-    sessionImage = std::move (grown);
+        Graphics g (grown);
+        g.drawImageAt (sessionImage, 0, 0, false);
+        sessionImage = std::move (grown);
+        invertedSessionImage = Image();
+        invertedDirty = true;
+    }
+
+    if (requiredX < sessionImage.getWidth())
+        return;
+
+    const int shiftPixels = requiredX - (sessionImage.getWidth() - 1);
+    if (shiftPixels <= 0)
+        return;
+
+    Image shifted (Image::ARGB, sessionImage.getWidth(), sessionImage.getHeight(), true, SoftwareImageType());
+    shifted.clear (shifted.getBounds(), clearColour);
+
+    Graphics g (shifted);
+    g.drawImageAt (sessionImage, -shiftPixels, 0, false);
+    sessionImage = std::move (shifted);
     invertedSessionImage = Image();
     invertedDirty = true;
+
+    droppedSourcePixels += (int64) shiftPixels;
+    latestDrawnX = jmax (-1, latestDrawnX - shiftPixels);
+    viewStartX = jmax (0.0, viewStartX - (double) shiftPixels);
+}
+
+int StreamScatterView::getMaxSessionImageWidth() const
+{
+    if (owner == nullptr || secondsPerPixel <= 0.0)
+        return 4096 * 4;
+
+    const int baseVisibleWidth = jmax (1, (int) std::round ((double) owner->getDisplayWindowSeconds() / secondsPerPixel));
+    return jmax (baseVisibleWidth + 1, baseVisibleWidth * 50);
 }
 
 void StreamScatterView::drawPeakOnSessionImage (const DriftMap::PeakEvent& peak, int numChannels)
@@ -104,12 +140,16 @@ void StreamScatterView::drawPeakOnSessionImage (const DriftMap::PeakEvent& peak,
     if (sessionStartTimeSeconds < 0.0)
         sessionStartTimeSeconds = peak.timestamp;
 
-    const int x = (int) std::floor ((peak.timestamp - sessionStartTimeSeconds) / secondsPerPixel);
+    const int absoluteX = (int) std::floor ((peak.timestamp - sessionStartTimeSeconds) / secondsPerPixel);
+    if (absoluteX < 0)
+        return;
+    int x = absoluteX - (int) droppedSourcePixels;
     if (x < 0)
         return;
 
     extendSessionImageWidth (x);
-    if (x >= sessionImage.getWidth())
+    x = absoluteX - (int) droppedSourcePixels;
+    if (x < 0 || x >= sessionImage.getWidth())
         return;
 
     int yPixel = sessionImage.getHeight() - 1;
@@ -122,10 +162,20 @@ void StreamScatterView::drawPeakOnSessionImage (const DriftMap::PeakEvent& peak,
     if (yPixel < 0 || yPixel >= sessionImage.getHeight())
         return;
 
-    constexpr float maxAmpUv = 250.0f;
-    const float normalized = jlimit (0.0f, 1.0f, jmax (0.0f, peak.amplitude) / jmax (1.0f, maxAmpUv));
-    const uint8 intensity = (uint8) jlimit (0, 255, 55 + (int) std::round (normalized * 200.0f));
-    const Colour pointColour (intensity, intensity, intensity, (uint8) 230);
+    constexpr float maxAmpUv = 150.0f;
+    float thresholdUv = 50.0f;
+
+    const float normalized = jlimit (0.0f,
+                                     1.0f,
+                                     (peak.amplitude - thresholdUv) / jmax (1.0f, maxAmpUv - thresholdUv));
+
+    constexpr float gamma = 0.7f;
+    constexpr int minIntensity = 45;
+    const float shaped = std::pow (normalized, gamma);
+    const uint8 intensity = (uint8) jlimit (0,
+                                            255,
+                                            minIntensity + (int) std::round (shaped * (255 - minIntensity)));
+    const Colour pointColour (intensity, intensity, intensity, (uint8) 100);
 
     const float circleDiameter = jlimit (2.0f, 14.0f, (float) sessionImage.getHeight() * 0.006f);
     const float radius = circleDiameter * 0.5f;
@@ -403,7 +453,7 @@ void StreamScatterView::paint (Graphics& g)
     const double visibleMinutes = visibleSeconds / 60.0;
     if (visibleMinutes <= 0.0)
         return;
-    const double minutesAtLeft = ((double) sourceX * secondsPerPixel) / 60.0;
+    const double minutesAtLeft = ((double) (sourceX + (int) droppedSourcePixels) * secondsPerPixel) / 60.0;
     const double minutesAtRight = minutesAtLeft + visibleMinutes;
 
     g.setFont (FontOptions().withHeight (13.0f));

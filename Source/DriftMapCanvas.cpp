@@ -45,8 +45,8 @@ void DriftMapCanvas::refreshTabColours()
 
 void StreamScatterView::resetSweepState()
 {
-    sessionStartTimeSeconds = -1.0;
-    secondsPerPixel = 0.0;
+    sessionStartTimeMinutes = -1.0;
+    minutesPerPixel = 0.0;
     latestDrawnX = -1;
     droppedSourcePixels = 0;
     viewStartX = 0.0;
@@ -83,6 +83,7 @@ void StreamScatterView::extendSessionImageWidth (int requiredX)
     if (! sessionImage.isValid())
         return;
     const int maxWidth = getMaxSessionImageWidth();
+
     if (maxWidth <= 1)
         return;
 
@@ -121,26 +122,25 @@ void StreamScatterView::extendSessionImageWidth (int requiredX)
     droppedSourcePixels += (int64) shiftPixels;
     latestDrawnX = jmax (-1, latestDrawnX - shiftPixels);
     viewStartX = jmax (0.0, viewStartX - (double) shiftPixels);
+
 }
 
 int StreamScatterView::getMaxSessionImageWidth() const
 {
-    if (owner == nullptr || secondsPerPixel <= 0.0)
+    if (owner == nullptr || minutesPerPixel <= 0.0)
         return 4096 * 4;
-
-    const int baseVisibleWidth = jmax (1, (int) std::round ((double) owner->getDisplayWindowSeconds() / secondsPerPixel));
+    const int baseVisibleWidth = jmax (1, (int) std::round (owner->getDisplayWindowMinutes() / minutesPerPixel));
     return jmax (baseVisibleWidth + 1, baseVisibleWidth * 50);
 }
 
 void StreamScatterView::drawPeakOnSessionImage (const DriftMap::PeakEvent& peak, int numChannels)
 {
-    if (! sessionImage.isValid() || numChannels <= 0 || secondsPerPixel <= 0.0)
+    if (! sessionImage.isValid() || numChannels <= 0 || minutesPerPixel <= 0.0)
         return;
-
-    if (sessionStartTimeSeconds < 0.0)
-        sessionStartTimeSeconds = peak.timestamp;
-
-    const int absoluteX = (int) std::floor ((peak.timestamp - sessionStartTimeSeconds) / secondsPerPixel);
+    const double peakTimeMinutes = peak.timestamp / 60.0;
+    if (sessionStartTimeMinutes < 0.0)
+        sessionStartTimeMinutes = peakTimeMinutes;
+    const int absoluteX = (int) std::floor ((peakTimeMinutes - sessionStartTimeMinutes) / minutesPerPixel);
     if (absoluteX < 0)
         return;
     int x = absoluteX - (int) droppedSourcePixels;
@@ -208,13 +208,13 @@ void StreamScatterView::appendPeaksFromProcessor()
     if (! sessionImage.isValid())
         return;
 
-    if (secondsPerPixel <= 0.0)
-        secondsPerPixel = (double) owner->getDisplayWindowSeconds() / (double) jmax (1, cachedPlotWidth);
+    if (minutesPerPixel <= 0.0)
+        minutesPerPixel = owner->getDisplayWindowMinutes() / (double) jmax (1, cachedPlotWidth);
 
     bool wasAtLatestEdge = false;
     if (! followLatest && latestDrawnX >= 0)
     {
-        const double baseVisibleWidth = (double) owner->getDisplayWindowSeconds() / secondsPerPixel;
+        const double baseVisibleWidth = owner->getDisplayWindowMinutes() / minutesPerPixel;
         const int visibleSourceWidth = jmax (1, (int) std::round (baseVisibleWidth / viewZoom));
         const int maxStartBefore = jmax (0, latestDrawnX - visibleSourceWidth + 1);
         wasAtLatestEdge = std::abs (viewStartX - (double) maxStartBefore) <= 1.0;
@@ -269,9 +269,9 @@ void StreamScatterView::setLightMode (bool enabled)
     repaint();
 }
 
-void StreamScatterView::setTimebaseSeconds (double timebaseSeconds)
+void StreamScatterView::setTimebaseMinutes (double timebaseMinutes)
 {
-    if (! sessionImage.isValid() || secondsPerPixel <= 0.0 || timebaseSeconds <= 0.0)
+    if (! sessionImage.isValid() || minutesPerPixel <= 0.0 || timebaseMinutes <= 0.0)
         return;
     if (latestDrawnX < 0)
         return;
@@ -327,7 +327,7 @@ void StreamScatterView::resetViewToLatest()
 {
     if (! sessionImage.isValid() || latestDrawnX < 0)
         return;
-    const double baseVisibleWidth = (double) owner->getDisplayWindowSeconds() / secondsPerPixel;
+    const double baseVisibleWidth = owner->getDisplayWindowMinutes() / minutesPerPixel;
     const int visibleSourceWidth = jmax (1, (int) std::round (baseVisibleWidth / viewZoom));
     const int maxStart = jmax (0, latestDrawnX - visibleSourceWidth + 1);
     viewStartX = (double) maxStart;
@@ -353,7 +353,7 @@ void StreamScatterView::mouseDrag (const MouseEvent& event)
     const int dx = event.x - lastDragX;
     lastDragX = event.x;
 
-    const double baseVisibleWidth = (double) owner->getDisplayWindowSeconds() / secondsPerPixel;
+    const double baseVisibleWidth = owner->getDisplayWindowMinutes() / minutesPerPixel;
     const double visibleSourceWidth = jmax (1.0, baseVisibleWidth / viewZoom);
     const int maxStart = jmax (0, latestDrawnX - (int) std::round (visibleSourceWidth) + 1);
     const double sourceDelta = -((double) dx * (visibleSourceWidth / (double) cachedPlotWidth));
@@ -381,7 +381,7 @@ void StreamScatterView::mouseWheelMove (const MouseEvent& event, const MouseWhee
 
     followLatest = false;
 
-    const double baseVisibleWidth = (double) owner->getDisplayWindowSeconds() / secondsPerPixel;
+    const double baseVisibleWidth = owner->getDisplayWindowMinutes() / minutesPerPixel;
     const double oldVisibleWidth = jmax (1.0, baseVisibleWidth / viewZoom);
     const double zoomFactor = wheel.deltaY > 0.0f ? 1.15 : (1.0 / 1.15);
     viewZoom = jlimit (1.0, 64.0, viewZoom * zoomFactor);
@@ -425,7 +425,7 @@ void StreamScatterView::paint (Graphics& g)
 
     if (followLatest)
         resetViewToLatest();
-    const double baseVisibleWidth = (double) owner->getDisplayWindowSeconds() / secondsPerPixel;
+    const double baseVisibleWidth = owner->getDisplayWindowMinutes() / minutesPerPixel;
     const int visibleSourceWidth = jmax (1, (int) std::round (baseVisibleWidth / viewZoom));
     const int maxStart = (latestDrawnX >= 0) ? jmax (0, latestDrawnX - visibleSourceWidth + 1) : 0;
     const int sourceX = jlimit (0,
@@ -458,11 +458,10 @@ void StreamScatterView::paint (Graphics& g)
                 (float) timelineBounds.getY(),
                 1.0f);
 
-    const double visibleSeconds = visibleSourceWidth * secondsPerPixel;
-    const double visibleMinutes = visibleSeconds / 60.0;
+    const double visibleMinutes = visibleSourceWidth * minutesPerPixel;
     if (visibleMinutes <= 0.0)
         return;
-    const double minutesAtLeft = ((double) (sourceX + (int) droppedSourcePixels) * secondsPerPixel) / 60.0;
+    const double minutesAtLeft = (double) (sourceX + (int) droppedSourcePixels) * minutesPerPixel;
     const double minutesAtRight = minutesAtLeft + visibleMinutes;
 
     g.setFont (FontOptions().withHeight (13.0f));
@@ -494,11 +493,15 @@ void StreamScatterView::paint (Graphics& g)
         String label = (decimals == 0) ? String ((int) std::round (tickMinutes))
                                        : String (tickMinutes, decimals);
         label << " min";
+        constexpr int labelWidth = 60;
+        const int labelX = jlimit (timelineBounds.getX(),
+                                   timelineBounds.getRight() - labelWidth,
+                                   x - (labelWidth / 2));
 
         g.drawText (label,
-                    x - 32,
+                    labelX,
                     timelineBounds.getY() + 5,
-                    60,
+                    labelWidth,
                     timelineBounds.getHeight() - 5,
                     Justification::centredTop,
                     false);
@@ -524,7 +527,7 @@ OptionsBar::OptionsBar (DriftMapCanvas* canvas_, DriftMap* processor_)
     refractoryEditor->setLayout (ParameterEditor::Layout::nameOnLeft);
     addParameterEditor (refractoryEditor, 250, 12);
 
-    auto* windowEditor = new ComboBoxParameterEditor (canvas->getParameter ("display_window_s"), 25, 200);
+    auto* windowEditor = new ComboBoxParameterEditor (canvas->getParameter ("display_window_min"), 25, 200);
     windowEditor->setLayout (ParameterEditor::Layout::nameOnLeft);
     addParameterEditor (windowEditor, 465, 12);
 
@@ -574,7 +577,7 @@ DriftMapCanvas::DriftMapCanvas (DriftMap* processor_)
     themes.add ("Dark");
     themes.add ("Light");
 
-    addCategoricalParameter ("display_window_s",
+    addCategoricalParameter ("display_window_min",
                              "Timebase (min)",
                              "Visible time range in minutes",
                              windows,
@@ -641,13 +644,13 @@ void DriftMapCanvas::refresh()
 void DriftMapCanvas::parameterValueChanged (Parameter* param)
 {
     const bool isThemeChange = param->getName().equalsIgnoreCase ("theme_mode");
-    const bool isWindowChange = param->getName().equalsIgnoreCase ("display_window_s");
+    const bool isWindowChange = param->getName().equalsIgnoreCase ("display_window_min");
 
     if (! isThemeChange && ! isWindowChange)
         return;
 
     const bool lightMode = isThemeChange && ((int) param->getValue() == 1);
-    const double timebaseSeconds = (double) getDisplayWindowSeconds();
+    const double timebaseMinutes = getDisplayWindowMinutes();
 
     for (int i = 0; i < streamTabs->getNumTabs(); ++i)
     {
@@ -658,7 +661,7 @@ void DriftMapCanvas::parameterValueChanged (Parameter* param)
         if (isThemeChange)
             view->setLightMode (lightMode);
         if (isWindowChange)
-            view->setTimebaseSeconds (timebaseSeconds);
+            view->setTimebaseMinutes (timebaseMinutes);
 
         view->refreshFromProcessor();
     }
@@ -677,13 +680,13 @@ void DriftMapCanvas::loadCustomParametersFromXml (XmlElement* xml)
 {
 }
 
-int DriftMapCanvas::getDisplayWindowSeconds() const
+double DriftMapCanvas::getDisplayWindowMinutes() const
 {
-    auto* windowParam = getParameter ("display_window_s");
+    auto* windowParam = getParameter ("display_window_min");
     if (windowParam == nullptr)
-        return 60;
-    const int windowMinutes = windowParam->getValueAsString().getIntValue();
-    return jmax (1, windowMinutes) * 60;
+        return 1.0;
+    const double windowMinutes = windowParam->getValueAsString().getDoubleValue();
+    return jmax (0.25, windowMinutes);
 }
 
 void DriftMapCanvas::clearAllViews()

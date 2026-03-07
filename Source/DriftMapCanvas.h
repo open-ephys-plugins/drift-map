@@ -99,8 +99,8 @@ public:
     /** Enables or disables light-mode rendering. */
     void setLightMode (bool enabled);
 
-    /** Updates the timebase used for visible-window scaling. */
-    void setTimebaseSeconds (double timebaseSeconds);
+    /** Updates the timebase used for visible-window scaling in minutes. */
+    void setTimebaseMinutes (double timebaseMinutes);
 
     /** Returns the stream id rendered by this view. */
     uint16 getStreamId() const { return streamId; }
@@ -137,8 +137,8 @@ private:
     Image invertedSessionImage;
     bool invertedDirty = true;
     bool lightModeEnabled = false;
-    double sessionStartTimeSeconds = -1.0;
-    double secondsPerPixel = 0.0;
+    double sessionStartTimeMinutes = -1.0;
+    double minutesPerPixel = 0.0;
     int latestDrawnX = -1;
     int64 droppedSourcePixels = 0;
     double viewStartX = 0.0;
@@ -188,9 +188,8 @@ public:
 
     /** Restores canvas-specific parameters from XML. */
     void loadCustomParametersFromXml (XmlElement* xml) override;
-    /** Returns the selected display window duration in seconds. */
-
-    int getDisplayWindowSeconds() const;
+    /** Returns the selected display window duration in minutes. */
+    double getDisplayWindowMinutes() const;
 
     /** Clears history for all stream views. */
     void clearAllViews();

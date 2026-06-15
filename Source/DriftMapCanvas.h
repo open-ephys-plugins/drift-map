@@ -111,9 +111,8 @@ private:
 
     /** Allocates the backing session image if needed. */
     void ensureSessionImage (Rectangle<int> plotBounds);
-
-    /** Draws one detected peak into the backing session image. */
-    void drawPeakOnSessionImage (const DriftMap::PeakEvent& peak, int numChannels);
+    /** Draws a batch of detected peaks into the backing session image. */
+    void drawPeaksOnSessionImage (const std::vector<DriftMap::PeakEvent>& peaks, int numChannels);
 
     /** Grows the session image width to include a required x-coordinate. */
     void extendSessionImageWidth (int requiredX);
@@ -208,6 +207,10 @@ private:
     std::unique_ptr<OptionsBar> optionsBar;
     std::unique_ptr<Viewport> optionsViewport;
     std::unique_ptr<TabbedComponent> streamTabs;
+    int hiddenTabRefreshCounter = 0;
+    int nextHiddenTabIndex = 0;
+
+    static constexpr int hiddenTabRefreshIntervalTicks = 5;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DriftMapCanvas);
 };

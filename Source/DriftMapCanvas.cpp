@@ -133,64 +133,103 @@ int StreamScatterView::getMaxSessionImageWidth() const
     return jmax (baseVisibleWidth + 1, baseVisibleWidth * 50);
 }
 
-void StreamScatterView::drawPeakOnSessionImage (const DriftMap::PeakEvent& peak, int numChannels)
+void StreamScatterView::drawPeaksOnSessionImage (const std::vector<DriftMap::PeakEvent>& peaks, int numChannels)
 {
-    if (! sessionImage.isValid() || numChannels <= 0 || minutesPerPixel <= 0.0)
+    if (! sessionImage.isValid() || numChannels <= 0 || minutesPerPixel <= 0.0 || peaks.empty())
         return;
-    const double peakTimeMinutes = peak.timestamp / 60.0;
     if (sessionStartTimeMinutes < 0.0)
-        sessionStartTimeMinutes = peakTimeMinutes;
-    const int absoluteX = (int) std::floor ((peakTimeMinutes - sessionStartTimeMinutes) / minutesPerPixel);
-    if (absoluteX < 0)
-        return;
-    int x = absoluteX - (int) droppedSourcePixels;
-    if (x < 0)
-        return;
+        sessionStartTimeMinutes = peaks.front().timestamp / 60.0;
 
-    extendSessionImageWidth (x);
-    x = absoluteX - (int) droppedSourcePixels;
-    if (x < 0 || x >= sessionImage.getWidth())
-        return;
-
-    int yPixel = sessionImage.getHeight() - 1;
-    if (numChannels > 1)
+    int maxRequiredX = -1;
+    for (const auto& peak : peaks)
     {
-        const int displayChannel = jlimit (0,
-                                           numChannels - 1,
-                                           processor->getDisplayChannelForStream (streamId, (int) peak.channel));
-        const double yNorm = (double) displayChannel / (double) (numChannels - 1);
-        yPixel = sessionImage.getHeight() - 1 - (int) (yNorm * (sessionImage.getHeight() - 1));
+        const double peakTimeMinutes = peak.timestamp / 60.0;
+        const int absoluteX = (int) std::floor ((peakTimeMinutes - sessionStartTimeMinutes) / minutesPerPixel);
+
+        if (absoluteX < 0)
+            continue;
+
+        maxRequiredX = jmax (maxRequiredX, absoluteX - (int) droppedSourcePixels);
     }
 
-    if (yPixel < 0 || yPixel >= sessionImage.getHeight())
+    if (maxRequiredX < 0)
         return;
 
-    constexpr float maxAmpUv = 150.0f;
-    float thresholdUv = 50.0f;
+    extendSessionImageWidth (maxRequiredX);
 
-    const float normalized = jlimit (0.0f,
-                                     1.0f,
-                                     (peak.amplitude - thresholdUv) / jmax (1.0f, maxAmpUv - thresholdUv));
+    constexpr float maxAmpUv = 150.0f;
 
     constexpr float gamma = 0.7f;
     constexpr int minIntensity = 45;
-    const float shaped = std::pow (normalized, gamma);
-    const uint8 intensity = (uint8) jlimit (0,
-                                            255,
-                                            minIntensity + (int) std::round (shaped * (255 - minIntensity)));
-    const Colour pointColour (intensity, intensity, intensity, (uint8) 100);
+    constexpr float thresholdUv = 50.0f;
+    static constexpr int kernelSize = 5;
+    static constexpr int kernelRadius = kernelSize / 2;
+    static constexpr std::array<uint8, kernelSize * kernelSize> alphaKernel
+        = { 0, 32, 64, 32, 0,
+            32, 128, 192, 128, 32,
+            64, 192, 255, 192, 64,
+            32, 128, 192, 128, 32,
+            0, 32, 64, 32, 0 };
 
-    const float circleDiameter = jlimit (2.0f, 14.0f, (float) sessionImage.getHeight() * 0.006f);
-    const float radius = circleDiameter * 0.5f;
+    Image::BitmapData bitmap (sessionImage, Image::BitmapData::readWrite);
+    for (const auto& peak : peaks)
+    {
+        const double peakTimeMinutes = peak.timestamp / 60.0;
+        const int absoluteX = (int) std::floor ((peakTimeMinutes - sessionStartTimeMinutes) / minutesPerPixel);
+        if (absoluteX < 0)
+            continue;
 
-    Graphics imageGraphics (sessionImage);
-    imageGraphics.setColour (pointColour);
-    imageGraphics.fillEllipse ((float) x - radius,
-                               (float) yPixel - radius,
-                               circleDiameter / 2.0f,
-                               circleDiameter);
+        const int x = absoluteX - (int) droppedSourcePixels;
+        if (x < 0 || x >= sessionImage.getWidth())
+            continue;
 
-    latestDrawnX = jmax (latestDrawnX, x);
+        int yPixel = sessionImage.getHeight() - 1;
+        if (numChannels > 1)
+        {
+            const int displayChannel = jlimit (0,
+                                               numChannels - 1,
+                                               processor->getDisplayChannelForStream (streamId, (int) peak.channel));
+            const double yNorm = (double) displayChannel / (double) (numChannels - 1);
+            yPixel = sessionImage.getHeight() - 1 - (int) (yNorm * (sessionImage.getHeight() - 1));
+        }
+
+        if (yPixel < 0 || yPixel >= sessionImage.getHeight())
+            continue;
+
+        const float normalized = jlimit (0.0f,
+                                         1.0f,
+                                         (peak.amplitude - thresholdUv) / jmax (1.0f, maxAmpUv - thresholdUv));
+        const float shaped = std::pow (normalized, gamma);
+        const uint8 intensity = (uint8) jlimit (0,
+                                                255,
+                                                minIntensity + (int) std::round (shaped * (255 - minIntensity)));
+        for (int dy = -kernelRadius; dy <= kernelRadius; ++dy)
+        {
+            const int py = yPixel + dy;
+            if (py < 0 || py >= bitmap.height)
+                continue;
+            for (int dx = -kernelRadius; dx <= kernelRadius; ++dx)
+            {
+
+                const int px = x + dx;
+                if (px < 0 || px >= bitmap.width)
+                    continue;
+                const uint8 alpha = alphaKernel[(dy + kernelRadius) * kernelSize + (dx + kernelRadius)];
+                if (alpha == 0)
+                    continue;
+
+                const uint8 weightedIntensity = (uint8) ((static_cast<int> (intensity) * alpha) / 255);
+
+                uint8* pixel = bitmap.getLinePointer (py) + (px * bitmap.pixelStride);
+                pixel[0] = jmax (pixel[0], weightedIntensity);
+                pixel[1] = jmax (pixel[1], weightedIntensity);
+                pixel[2] = jmax (pixel[2], weightedIntensity);
+                pixel[3] = 255;
+            }
+        }
+
+        latestDrawnX = jmax (latestDrawnX, x);
+    }
     invertedDirty = true;
 }
 
@@ -228,8 +267,7 @@ void StreamScatterView::appendPeaksFromProcessor()
                newPeaks.end(),
                [] (const DriftMap::PeakEvent& a, const DriftMap::PeakEvent& b) { return a.timestamp < b.timestamp; });
 
-    for (const auto& peak : newPeaks)
-        drawPeakOnSessionImage (peak, numChannels);
+    drawPeaksOnSessionImage (newPeaks, numChannels);
 
     if (followLatest || wasAtLatestEdge)
         followLatest = true;
@@ -629,15 +667,40 @@ void DriftMapCanvas::refresh()
 {
     if (streamTabs == nullptr)
         return;
+    const int numTabs = streamTabs->getNumTabs();
+    if (numTabs <= 0)
+        return;
 
     const int currentTabIndex = streamTabs->getCurrentTabIndex();
-    for (int i = 0; i < streamTabs->getNumTabs(); ++i)
+    if (isPositiveAndBelow (currentTabIndex, numTabs))
     {
-        auto* view = dynamic_cast<StreamScatterView*> (streamTabs->getTabContentComponent (i));
-        if (view == nullptr)
+        auto* currentView = dynamic_cast<StreamScatterView*> (streamTabs->getTabContentComponent (currentTabIndex));
+        if (currentView != nullptr)
+            currentView->updateFromProcessor (true);
+    }
+
+    if (numTabs <= 1)
+        return;
+
+    if (++hiddenTabRefreshCounter < hiddenTabRefreshIntervalTicks)
+        return;
+
+    hiddenTabRefreshCounter = 0;
+
+    for (int attempts = 0; attempts < numTabs; ++attempts)
+    {
+        const int hiddenTabIndex = nextHiddenTabIndex % numTabs;
+        nextHiddenTabIndex = (hiddenTabIndex + 1) % numTabs;
+
+        if (hiddenTabIndex == currentTabIndex)
             continue;
 
-        view->updateFromProcessor (i == currentTabIndex);
+        auto* hiddenView = dynamic_cast<StreamScatterView*> (streamTabs->getTabContentComponent (hiddenTabIndex));
+        if (hiddenView != nullptr)
+        {
+            hiddenView->updateFromProcessor (false);
+            break;
+        }
     }
 }
 
@@ -735,6 +798,9 @@ void DriftMapCanvas::rebuildTabs()
 
     if (streamTabs->getNumTabs() > 0)
         streamTabs->setCurrentTabIndex (jlimit (0, streamTabs->getNumTabs() - 1, tabIndexToSelect));
+
+    hiddenTabRefreshCounter = 0;
+    nextHiddenTabIndex = 0;
     refreshTabColours();
 }
 

@@ -561,19 +561,27 @@ OptionsBar::OptionsBar (DriftMapCanvas* canvas_, DriftMap* processor_)
 
     auto* thresholdEditor = new TextBoxParameterEditor (processor->getParameter ("threshold_uv"), 25, 210);
     thresholdEditor->setLayout (ParameterEditor::Layout::nameOnLeft);
-    addParameterEditor (thresholdEditor, 20, 12);
+    thresholdEditor->getLabel()->setBounds (0, 0, 128, 25);
+    thresholdEditor->getEditor()->setBounds (132, 0, 78, 25);
+    addParameterEditor (thresholdEditor, 10, 12);
 
     auto* refractoryEditor = new TextBoxParameterEditor (processor->getParameter ("refractory_ms"), 25, 200);
     refractoryEditor->setLayout (ParameterEditor::Layout::nameOnLeft);
-    addParameterEditor (refractoryEditor, 250, 12);
+    refractoryEditor->getLabel()->setBounds (0, 0, 118, 25);
+    refractoryEditor->getEditor()->setBounds (122, 0, 78, 25);
+    addParameterEditor (refractoryEditor, 240, 12);
 
     auto* windowEditor = new ComboBoxParameterEditor (canvas->getParameter ("display_window_min"), 25, 200);
     windowEditor->setLayout (ParameterEditor::Layout::nameOnLeft);
-    addParameterEditor (windowEditor, 465, 12);
+    windowEditor->getLabel()->setBounds (0, 0, 118, 25);
+    windowEditor->getEditor()->setBounds (122, 0, 78, 25);
+    addParameterEditor (windowEditor, 455, 12);
 
     auto* themeEditor = new ComboBoxParameterEditor (canvas->getParameter ("theme_mode"), 25, 170);
     themeEditor->setLayout (ParameterEditor::Layout::nameOnLeft);
-    addParameterEditor (themeEditor, 660, 12);
+    themeEditor->getLabel()->setBounds (0, 0, 88, 25);
+    themeEditor->getEditor()->setBounds (92, 0, 78, 25);
+    addParameterEditor (themeEditor, 670, 12);
 }
 
 void OptionsBar::buttonClicked (Button* button)
@@ -624,7 +632,7 @@ DriftMapCanvas::DriftMapCanvas (DriftMap* processor_)
                              2);
 
     addCategoricalParameter ("theme_mode",
-                             "Theme",
+                             "Plot Theme",
                              "Display theme for drift image",
                              themes,
                              0);
@@ -634,6 +642,7 @@ DriftMapCanvas::DriftMapCanvas (DriftMap* processor_)
     optionsViewport = std::make_unique<Viewport>();
     optionsViewport->setScrollBarsShown (false, true);
     optionsViewport->setScrollOnDragEnabled (true);
+    optionsViewport->setScrollBarThickness (12);
     addAndMakeVisible (optionsViewport.get());
     optionsBar = std::make_unique<OptionsBar> (this, processor);
     optionsViewport->setViewedComponent (optionsBar.get(), false);
@@ -658,6 +667,11 @@ void DriftMapCanvas::resized()
 void DriftMapCanvas::paint (Graphics& g)
 {
     g.fillAll (findColour (ThemeColours::componentParentBackground));
+    if (optionsViewport != nullptr)
+    {
+        g.setColour (findColour (ThemeColours::componentBackground));
+        g.fillRect (optionsViewport->getBounds());
+    }
 }
 void DriftMapCanvas::lookAndFeelChanged()
 {

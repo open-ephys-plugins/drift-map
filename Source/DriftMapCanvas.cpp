@@ -38,7 +38,7 @@ void DriftMapCanvas::refreshTabColours()
     if (streamTabs == nullptr)
         return;
 
-    const Colour tabColour = findColour (ThemeColours::componentParentBackground);
+    const Colour tabColour = findColour (ThemeColours::componentBackground);
     for (int i = 0; i < streamTabs->getNumTabs(); ++i)
         streamTabs->setTabBackgroundColour (i, tabColour);
 }
@@ -444,12 +444,14 @@ void StreamScatterView::mouseDoubleClick (const MouseEvent& event)
 
 void StreamScatterView::paint (Graphics& g)
 {
-    g.fillAll (lightModeEnabled ? Colour (200, 200, 200) : Colour (50, 50, 50));
-    auto contentBounds = getLocalBounds().reduced (16);
+    auto contentBounds = getLocalBounds().reduced (10);
     Rectangle<int> timelineBounds = contentBounds.removeFromBottom (20);
     Rectangle<int> plotBounds = contentBounds;
-    g.setColour (lightModeEnabled ? Colours::grey : Colours::darkgrey);
-    g.drawRect (plotBounds);
+    g.setColour (findColour (ThemeColours::outline));
+    g.drawRect (plotBounds.expanded (1));
+    g.drawRect (timelineBounds.expanded (1));
+    g.setColour (findColour (ThemeColours::widgetBackground));
+    g.fillRect (timelineBounds);
 
     if (processor == nullptr || owner == nullptr || plotBounds.getWidth() <= 1 || plotBounds.getHeight() <= 1)
         return;
@@ -489,7 +491,7 @@ void StreamScatterView::paint (Graphics& g)
                  sourceImage->getHeight(),
                  false);
 
-    g.setColour (lightModeEnabled ? Colours::black.withAlpha (0.2f) : Colours::white.withAlpha (0.2f));
+    g.setColour (findColour (ThemeColours::defaultText).withAlpha (0.75f));
     g.drawLine ((float) timelineBounds.getX(),
                 (float) timelineBounds.getY(),
                 (float) timelineBounds.getRight(),

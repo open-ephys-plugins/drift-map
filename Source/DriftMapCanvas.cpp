@@ -122,7 +122,6 @@ void StreamScatterView::extendSessionImageWidth (int requiredX)
     droppedSourcePixels += (int64) shiftPixels;
     latestDrawnX = jmax (-1, latestDrawnX - shiftPixels);
     viewStartX = jmax (0.0, viewStartX - (double) shiftPixels);
-
 }
 
 int StreamScatterView::getMaxSessionImageWidth() const
@@ -164,12 +163,7 @@ void StreamScatterView::drawPeaksOnSessionImage (const std::vector<DriftMap::Pea
     constexpr float thresholdUv = 50.0f;
     static constexpr int kernelSize = 5;
     static constexpr int kernelRadius = kernelSize / 2;
-    static constexpr std::array<uint8, kernelSize * kernelSize> alphaKernel
-        = { 0, 32, 64, 32, 0,
-            32, 128, 192, 128, 32,
-            64, 192, 255, 192, 64,
-            32, 128, 192, 128, 32,
-            0, 32, 64, 32, 0 };
+    static constexpr std::array<uint8, kernelSize * kernelSize> alphaKernel = { 0, 32, 64, 32, 0, 32, 128, 192, 128, 32, 64, 192, 255, 192, 64, 32, 128, 192, 128, 32, 0, 32, 64, 32, 0 };
 
     Image::BitmapData bitmap (sessionImage, Image::BitmapData::readWrite);
     for (const auto& peak : peaks)
@@ -210,7 +204,6 @@ void StreamScatterView::drawPeaksOnSessionImage (const std::vector<DriftMap::Pea
                 continue;
             for (int dx = -kernelRadius; dx <= kernelRadius; ++dx)
             {
-
                 const int px = x + dx;
                 if (px < 0 || px >= bitmap.width)
                     continue;
@@ -265,7 +258,8 @@ void StreamScatterView::appendPeaksFromProcessor()
 
     std::sort (newPeaks.begin(),
                newPeaks.end(),
-               [] (const DriftMap::PeakEvent& a, const DriftMap::PeakEvent& b) { return a.timestamp < b.timestamp; });
+               [] (const DriftMap::PeakEvent& a, const DriftMap::PeakEvent& b)
+               { return a.timestamp < b.timestamp; });
 
     drawPeaksOnSessionImage (newPeaks, numChannels);
 

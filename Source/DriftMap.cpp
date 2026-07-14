@@ -50,17 +50,17 @@ void DriftMap::registerParameters()
                        defaultThresholdUv,
                        -500,
                        -50,
-                        1.0);
+                       1.0);
 
     addFloatParameter (Parameter::PROCESSOR_SCOPE,
-                     "refractory_ms",
-                     "Refractory (ms)",
-                     "Minimum separation between peaks on a channel",
+                       "refractory_ms",
+                       "Refractory (ms)",
+                       "Minimum separation between peaks on a channel",
                        "ms",
-                     defaultRefractoryMs,
-                     0.5,
-                     20,
-                     0.5);
+                       defaultRefractoryMs,
+                       0.5,
+                       20,
+                       0.5);
 }
 
 AudioProcessorEditor* DriftMap::createEditor()
@@ -148,7 +148,7 @@ void DriftMap::updateSettings()
                 std::iota (order.begin(), order.end(), 0);
 
                 std::sort (order.begin(), order.end(), [&] (int i, int j)
-                {
+                           {
                     const float depthDiff = depths[(size_t) i] - depths[(size_t) j];
                     const float depthEpsilon = 1.0e-3f;
 
@@ -161,8 +161,7 @@ void DriftMap::updateSettings()
                     if (positionMetadataAvailable)
                         return xposValues[(size_t) i] < xposValues[(size_t) j];
 
-                    return i < j;
-                });
+                    return i < j; });
 
                 for (int orderedIndex = 0; orderedIndex < streamState.numChannels; ++orderedIndex)
                     streamState.displayChannelOrder[(size_t) order[(size_t) orderedIndex]] = orderedIndex;

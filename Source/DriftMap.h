@@ -120,7 +120,6 @@ private:
     void appendDetectedPeaks (StreamPeaks& streamState, const std::vector<PeakEvent>& detectedPeaks);
     void resetChannelDetectionHistory();
 
-
     static constexpr float defaultThresholdUv = -50;
     static constexpr float defaultRefractoryMs = 2;
     static constexpr size_t maxPendingPeaksPerStream = 500000;

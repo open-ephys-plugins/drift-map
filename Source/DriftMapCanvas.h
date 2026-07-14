@@ -147,7 +147,7 @@ private:
     int lastDragX = 0;
     int cachedPlotWidth = 0;
     int cachedPlotHeight = 0;
-    Colour clearColour = Colour(40, 40, 40);
+    Colour clearColour = Colour (40, 40, 40);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StreamScatterView);
 };

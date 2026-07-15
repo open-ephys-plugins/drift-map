@@ -54,7 +54,7 @@ void DriftMap::registerParameters()
 
     addFloatParameter (Parameter::PROCESSOR_SCOPE,
                        "refractory_ms",
-                       "Refractory (ms)",
+                       "Refractory",
                        "Minimum separation between peaks on a channel",
                        "ms",
                        defaultRefractoryMs,

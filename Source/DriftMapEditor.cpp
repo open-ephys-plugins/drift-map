@@ -29,6 +29,16 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 DriftMapEditor::DriftMapEditor (GenericProcessor* p)
     : VisualizerEditor (p, "Drift Map", 180)
 {
+
+    addTextBoxParameterEditor (Parameter::PROCESSOR_SCOPE, "threshold_uv", 15, 45);
+    addBoundedValueParameterEditor (Parameter::PROCESSOR_SCOPE, "refractory_ms", 15, 85);
+
+    for (auto* ed : parameterEditors)
+    {
+        ed->setBounds (ed->getX(), ed->getY(), 160, 18);
+        ed->getEditor()->setSize (70, 18);
+        ed->getLabel()->setBounds (72, 0, 88, 18);
+    }
 }
 
 Visualizer* DriftMapEditor::createNewCanvas()
